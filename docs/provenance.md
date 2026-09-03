@@ -1,5 +1,7 @@
 # Provenance
 
+`SPDX-License-Identifier: GPL-3.0-only`
+
 Full detail is in [`../NOTICE-DRAFT.md`](../NOTICE-DRAFT.md). This is the short version.
 
 ## Independent

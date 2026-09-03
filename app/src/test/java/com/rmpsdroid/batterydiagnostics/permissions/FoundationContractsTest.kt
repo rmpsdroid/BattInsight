@@ -35,6 +35,31 @@ class FoundationContractsTest {
     }
 
     @Test
+    fun `INTERACT_ACROSS_USERS_FULL is never offered as something to grant`() {
+        // The platform names it in the MATCH_ANY_USER denial, but it lacks the
+        // `development` protection level, so pm grant cannot deliver it. It is recorded
+        // only as an alternative the platform mentioned.
+        RequiredPermission.minimumSet.forEach {
+            assertFalse(
+                "${'$'}{it.name} must not be the FULL variant",
+                it.manifestName.endsWith("_FULL"),
+            )
+        }
+        assertEquals(
+            listOf("android.permission.INTERACT_ACROSS_USERS_FULL"),
+            RequiredPermission.INTERACT_ACROSS_USERS.platformMentionedAlternatives,
+        )
+        assertTrue(RequiredPermission.DUMP.platformMentionedAlternatives.isEmpty())
+    }
+
+    @Test
+    fun `grant command never asks for a permission we cannot obtain`() {
+        RequiredPermission.minimumSet.forEach {
+            assertFalse(it.grantCommand("com.example.app").contains("_FULL"))
+        }
+    }
+
+    @Test
     fun `grant command is well formed`() {
         assertEquals(
             "pm grant com.example.app android.permission.DUMP",

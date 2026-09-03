@@ -1,7 +1,5 @@
 package com.rmpsdroid.batterydiagnostics.collection
 
-import com.rmpsdroid.batterydiagnostics.capability.CapabilityState
-
 /**
  * Metadata describing one acquisition attempt.
  *
@@ -9,9 +7,10 @@ import com.rmpsdroid.batterydiagnostics.capability.CapabilityState
  * this type exists so the classification rules can be written and tested before any
  * collector exists.
  *
- * The single most important rule it encodes: **a zero exit status does not mean success.**
- * Every denial measured in Phase 1B returned exit 0 with the error written to stdout and
- * an empty stderr:
+ * ## Exit status is necessary but not sufficient
+ *
+ * Phase 1B measured every permission denial arriving with **exit status 0**, the error on
+ * **stdout**, and an empty stderr:
  *
  * ```
  * exit 0, stdout 131 B: "Permission Denial: can't dump BatteryStatsService ...
@@ -21,7 +20,15 @@ import com.rmpsdroid.batterydiagnostics.capability.CapabilityState
  *                        INTERACT_ACROSS_USERS permission ..."
  * ```
  *
- * Classification is therefore driven by content, with exit status as a secondary signal.
+ * So a zero exit cannot be treated as success. It does not follow that the exit code is
+ * irrelevant: a non-zero exit is real evidence of failure and is used as such. Content is
+ * examined first, then the exit code, then the shape of the output.
+ *
+ * ## This layer does not decide what an outcome means
+ *
+ * [outcome] reports mechanics only. In particular an empty result is [CollectionOutcome.Empty]
+ * and nothing more -- it is not translated into a capability state here, because whether
+ * emptiness is correct depends on what the source looks like when healthy.
  */
 data class CollectionResult(
     val backend: BackendIdentity.Kind,
@@ -43,70 +50,174 @@ data class CollectionResult(
     val hasStderr: Boolean get() = stderrBytes > 0
 
     /**
-     * Classify this attempt.
+     * Classify the mechanics of this attempt.
      *
-     * Order matters. Denials are checked before emptiness, and emptiness before success,
-     * because a denial is itself a small non-empty payload.
+     * Precedence, in order:
+     *  1. a recognised permission or security denial -- checked first because it can and
+     *     does arrive with exit 0;
+     *  2. a recognised source-level error;
+     *  3. a non-zero exit status;
+     *  4. output carrying a marker of the format we requested;
+     *  5. exit 0 with no output;
+     *  6. anything else, reported as unrecognised rather than assumed successful.
      */
-    fun classify(): CapabilityState {
+    fun outcome(): CollectionOutcome {
         if (exitCode == null) {
-            return CapabilityState.ExecutionFailed("process did not complete")
+            return CollectionOutcome.ExecutionFailed(null, "process did not complete")
         }
 
-        val combined = stdoutHead + '\n' + stderrText
-
-        missingPermissionIn(combined)?.let { return CapabilityState.PermissionMissing(it) }
-
-        if (combined.contains(PERMISSION_DENIAL, ignoreCase = true) ||
-            combined.contains(SECURITY_EXCEPTION, ignoreCase = true)
-        ) {
-            // Denied, but the platform did not name a permission we recognise.
-            return CapabilityState.ExecutionFailed(combined.trim().take(DETAIL_LIMIT))
-        }
-
-        if (!hasStdout) {
-            return if (exitCode == 0) {
-                // Empty is not failure. A healthy source with nothing to report looks like this.
-                CapabilityState.AvailableNoEvents("command produced no output")
-            } else {
-                CapabilityState.ExecutionFailed("exit $exitCode with no output")
+        val combined = buildString {
+            append(stdoutHead)
+            if (stderrText.isNotEmpty()) {
+                append('\n')
+                append(stderrText)
             }
         }
 
+        // 1. Denials first -- these arrive with exit 0.
+        denialIn(combined)?.let { return it }
+
+        // 2. Source-level errors the command itself reported.
+        sourceErrorIn(combined)?.let { return CollectionOutcome.SourceError(it) }
+
+        // 3. A non-zero exit is real evidence of failure, once content has been ruled out.
         if (exitCode != 0) {
-            return CapabilityState.ExecutionFailed("exit $exitCode")
+            val detail = combined.trim().ifEmpty { "no output" }.take(DETAIL_LIMIT)
+            return CollectionOutcome.ExecutionFailed(exitCode, detail)
         }
 
-        return CapabilityState.Available
+        // 4. Output that looks like what we asked for.
+        if (hasStdout && looksLikeRequestedFormat(combined)) {
+            return CollectionOutcome.Data(stdoutBytes)
+        }
+
+        // 5. Clean exit, nothing produced. Meaning is decided by the capability layer.
+        if (!hasStdout) {
+            return CollectionOutcome.Empty
+        }
+
+        // 6. Output we cannot account for. Never reported as success.
+        return CollectionOutcome.Unrecognised(combined.trim().take(DETAIL_LIMIT))
     }
 
-    private fun missingPermissionIn(text: String): String? =
-        KNOWN_PERMISSIONS.firstOrNull { permission ->
-            text.contains(permission) &&
-                (text.contains(MISSING, ignoreCase = true) ||
-                    text.contains(REQUIRES, ignoreCase = true))
+    /**
+     * Whether the output carries a marker of the format that was requested.
+     *
+     * Checkin output opens with a `vers` record; protobuf is binary and is length-checked
+     * rather than pattern-matched, because a text error message would otherwise pass.
+     */
+    private fun looksLikeRequestedFormat(text: String): Boolean = when (sourceFormat) {
+        SourceFormat.CHECKIN -> text.contains(CHECKIN_VERS_MARKER)
+        SourceFormat.PROTO -> stdoutBytes > PROTO_MIN_PLAUSIBLE_BYTES &&
+            !text.contains(PERMISSION_DENIAL, ignoreCase = true)
+        SourceFormat.TEXT -> stdoutBytes > 0
+    }
+
+    private fun denialIn(text: String): CollectionOutcome.PermissionDenied? {
+        val looksLikeDenial = text.contains(PERMISSION_DENIAL, ignoreCase = true) ||
+            text.contains(SECURITY_EXCEPTION, ignoreCase = true) ||
+            text.contains(MISSING, ignoreCase = true) ||
+            text.contains(REQUIRES, ignoreCase = true)
+        if (!looksLikeDenial) return null
+
+        val signature = DENIAL_SIGNATURES.firstOrNull { sig ->
+            sig.markers.any { text.contains(it) }
         }
+        val detail = text.trim().take(DETAIL_LIMIT)
+
+        return when {
+            signature != null -> CollectionOutcome.PermissionDenied(
+                permission = signature.actionable,
+                alternatives = signature.alternatives.filter { text.contains(it) },
+                rawDetail = detail,
+            )
+            // Refused, but no permission we recognise was named. Not a permission we can
+            // act on, so it is not reported as one.
+            text.contains(PERMISSION_DENIAL, ignoreCase = true) ||
+                text.contains(SECURITY_EXCEPTION, ignoreCase = true) -> null
+            else -> null
+        }
+    }
+
+    private fun sourceErrorIn(text: String): String? {
+        val marker = SOURCE_ERROR_MARKERS.firstOrNull { text.contains(it, ignoreCase = true) }
+            ?: return null
+        return if (text.contains(PERMISSION_DENIAL, ignoreCase = true) ||
+            text.contains(SECURITY_EXCEPTION, ignoreCase = true)
+        ) {
+            null // a denial, already handled above
+        } else {
+            "$marker: ${text.trim().take(DETAIL_LIMIT)}"
+        }
+    }
+
+    /**
+     * A recognised denial, and which permission we should actually ask the user for.
+     *
+     * @param actionable the permission our onboarding can grant.
+     * @param alternatives permissions the platform also names but which we cannot obtain.
+     */
+    private data class DenialSignature(
+        val actionable: String,
+        val alternatives: List<String> = emptyList(),
+        val markers: List<String>,
+    )
 
     companion object {
         private const val PERMISSION_DENIAL = "Permission Denial"
         private const val SECURITY_EXCEPTION = "Security exception"
-        private const val MISSING = "missing"
-        private const val REQUIRES = "requires"
-        private const val DETAIL_LIMIT = 200
+        private const val MISSING = "missing android.permission"
+        private const val REQUIRES = "requires android.permission"
+        private const val CHECKIN_VERS_MARKER = ",vers,"
+        private const val PROTO_MIN_PLAUSIBLE_BYTES = 1024
+        private const val DETAIL_LIMIT = 400
+
+        private val SOURCE_ERROR_MARKERS = listOf(
+            "Unknown option",
+            "Bad argument",
+            "can't find service",
+            "Could not access",
+        )
 
         /**
-         * Permissions the platform has been measured to name in a denial.
+         * Denials the platform has been measured to produce.
          *
-         * Ordered most specific first: the INTERACT_ACROSS_USERS denial text mentions both
-         * `INTERACT_ACROSS_USERS_FULL` and `INTERACT_ACROSS_USERS`, so the longer name must
-         * be tested first to avoid reporting the wrong one.
+         * `INTERACT_ACROSS_USERS` is the case that matters. The measured message names
+         * both `INTERACT_ACROSS_USERS_FULL` and `INTERACT_ACROSS_USERS`:
+         *
+         * ```
+         * Security exception: MATCH_ANY_USER flag requires INTERACT_ACROSS_USERS permission:
+         * UID 10241 requires android.permission.INTERACT_ACROSS_USERS_FULL or
+         * android.permission.INTERACT_ACROSS_USERS to access user 0.
+         * ```
+         *
+         * Only the non-`_FULL` form is actionable for us: Phase 1B measured that granting
+         * `INTERACT_ACROSS_USERS` alone was sufficient for full acquisition, and on
+         * Android 16 it carries the `development` protection level that makes `pm grant`
+         * work. `INTERACT_ACROSS_USERS_FULL` does not share that grant model, so telling a
+         * user to grant it would send them down a path that cannot succeed.
+         *
+         * `_FULL` is therefore recorded as an alternative the platform mentioned, never as
+         * the thing to ask for.
          */
-        private val KNOWN_PERMISSIONS = listOf(
-            "android.permission.INTERACT_ACROSS_USERS_FULL",
-            "android.permission.INTERACT_ACROSS_USERS",
-            "android.permission.PACKAGE_USAGE_STATS",
-            "android.permission.DUMP",
-            "android.permission.BATTERY_STATS",
+        private val DENIAL_SIGNATURES = listOf(
+            DenialSignature(
+                actionable = "android.permission.DUMP",
+                markers = listOf("android.permission.DUMP"),
+            ),
+            DenialSignature(
+                actionable = "android.permission.PACKAGE_USAGE_STATS",
+                markers = listOf("android.permission.PACKAGE_USAGE_STATS"),
+            ),
+            DenialSignature(
+                actionable = "android.permission.INTERACT_ACROSS_USERS",
+                alternatives = listOf("android.permission.INTERACT_ACROSS_USERS_FULL"),
+                markers = listOf("INTERACT_ACROSS_USERS"),
+            ),
+            DenialSignature(
+                actionable = "android.permission.BATTERY_STATS",
+                markers = listOf("android.permission.BATTERY_STATS"),
+            ),
         )
     }
 }

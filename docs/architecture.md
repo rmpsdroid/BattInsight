@@ -10,8 +10,8 @@ upgrade there once deleted every user's history.
 
 | Layer | Responsibility | State in Phase 2A |
 |---|---|---|
-| **Collection** | Obtain raw bytes from a source. No interpretation, no policy | `PrivilegeBackend`, `BackendIdentity`, `SourceFormat`, `CollectionResult` — contracts only |
-| **Capability** | Determine what is possible *right now* by attempting operations | `Capability`, `CapabilityState` — model only |
+| **Collection** | Obtain raw bytes and report execution mechanics. No interpretation, no policy | `PrivilegeBackend`, `BackendIdentity`, `SourceFormat`, `CollectionResult`, `CollectionOutcome` — contracts only |
+| **Capability** | Decide what an outcome *means* for a given source | `Capability`, `CapabilityState`, `SourceReading`, `CapabilityInterpreter` |
 | **Domain** | Normalise raw output into stable value types | Not started |
 | **Session engine** | Snapshot identity, session boundaries, comparability, reconciliation | Not started. See `session-model.md` |
 | **Persistence** | Store snapshots durably with explicit schema versioning | Not started |
@@ -39,9 +39,12 @@ and tested against a fake.
    Android 16 is mode 0755 root:root yet unreadable from the shell domain — SELinux
    context decided it, not the UID. A design that reasons from privilege level gets this
    wrong.
-2. **Classification is by content, never by exit code.** Every denial measured returned
-   exit 0 with the error on stdout.
-3. **Empty is not failure.** See `capabilities.md`.
+2. **Exit status is necessary but not sufficient.** Every denial measured returned exit 0
+   with the error on stdout, so content is checked first — but a non-zero exit remains real
+   evidence of failure and is not ignored.
+3. **Mechanics and meaning are different layers.** `CollectionOutcome` says what a process
+   did; `CapabilityInterpreter` says what that means. The collection layer never concludes
+   `AvailableNoEvents` from a generic empty result. See `capabilities.md`.
 4. **The session engine owns charging state**, not the data source. See `session-model.md`.
 5. **The UI computes no session arithmetic.** Views receive prepared models with explicit
    bounds. Chart code that derives its own time axis is where "the graph starts at the

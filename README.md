@@ -21,7 +21,7 @@ contracts, tests, lint gate and documentation exist. No product feature does.
 | | |
 |---|---|
 | Builds | ✅ `assembleDebug` |
-| Tests | ✅ 24 unit tests |
+| Tests | ✅ 39 unit tests |
 | Lint | ✅ passes with `abortOnError = true` |
 | Installable | Yes, but shows only a placeholder screen |
 | Useful | Not yet |
@@ -49,8 +49,13 @@ shape the contracts in `app/src/main/java/.../`:
   the `/sys` and `/proc` paths the archived predecessor used, which were unreadable on
   every environment tested.
 - **Every failure mode returns exit status 0.** Permission denials arrive on stdout;
-  `UsageStatsManager` returns an empty list rather than throwing. Classification is by
-  content, never by exit code — this is why `CapabilityState` has eight cases.
+  `UsageStatsManager` returns an empty list rather than throwing. Content is examined
+  before the exit code — though a non-zero exit is still real evidence of failure and is
+  used as such.
+- **Execution mechanics and capability meaning are separate layers.** `CollectionOutcome`
+  reports what a process did; `CapabilityInterpreter` decides what that means for a given
+  data source. An empty result is only "healthy but idle" when something has looked inside
+  and found a present-but-quiet source — the process layer cannot know that.
 
 Full detail lives in the phase reports outside this repository.
 
@@ -100,7 +105,14 @@ No signing configuration exists and none will use an inherited key.
 
 ## Licence
 
-**GNU General Public License v3.0** — see [LICENSE](LICENSE).
+**GNU General Public License v3.0 only** — see [LICENSE](LICENSE).
+
+```
+SPDX-License-Identifier: GPL-3.0-only
+```
+
+Version 3 **only**. No "or later" grant is offered; adopting a future GPL version would be
+a fresh decision, not an automatic one.
 
 Copyleft is a deliberate choice. The archived predecessor was permissively licensed, and
 its author closed the successor's source specifically because forks reused its name and

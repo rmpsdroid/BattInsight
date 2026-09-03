@@ -8,8 +8,15 @@
 
 ## 1. This project's own licence
 
-This project is licensed under the **GNU General Public License, version 3.0**.
+This project is licensed under the **GNU General Public License, version 3.0 only**.
 The full text is in [`LICENSE`](LICENSE).
+
+```
+SPDX-License-Identifier: GPL-3.0-only
+```
+
+**Version 3 only.** No "or later" grant is offered. Moving to a future GPL version would
+require a fresh decision by the project owner.
 
 Copyright © 2026 the Battery Diagnostics contributors.
 *("Battery Diagnostics" is a provisional working name — see §5.)*
@@ -112,7 +119,7 @@ Binary dependencies resolved at build time. None is vendored into this repositor
 | Kotlin standard library (supplied by AGP built-in Kotlin) | Apache-2.0 |
 | JUnit 4 (test only) | Eclipse Public License 1.0 |
 
-Apache-2.0 dependencies are compatible with GPL-3.0 as inbound licences.
+Apache-2.0 dependencies are compatible with GPL-3.0-only as inbound licences.
 
 ---
 

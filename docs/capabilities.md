@@ -18,6 +18,25 @@ into "it works" or "check your permissions".
 | `ExecutionFailed` | Process did not run, timed out, or produced something unrecognised |
 | `Unknown` | Not probed. Never treat as either available or unavailable |
 
+## Which layer assigns these
+
+`CapabilityState` is **semantic** and is assigned by `CapabilityInterpreter`. The collection
+layer reports mechanics only, through `CollectionOutcome`:
+
+| `CollectionOutcome` | Meaning |
+|---|---|
+| `Data(bytes)` | Process ran, output carries a marker of the requested format |
+| `Empty` | Process ran, exited 0, produced nothing. **Nothing more is claimed** |
+| `PermissionDenied(permission, alternatives, rawDetail)` | Platform refused and named a permission |
+| `SourceError(detail)` | Command reported a problem: unknown option, service unreachable |
+| `ExecutionFailed(exitCode, detail)` | Did not run, timed out, or exited non-zero |
+| `Unrecognised(detail)` | Output we cannot account for — never reported as success |
+
+The split exists because `AvailableNoEvents` cannot honestly be concluded from a bare empty
+result. `CapabilityInterpreter` reaches it only when given a `SourceReading` showing the
+section was present with records but no values — the measured kernel-wakelock case. A
+generic empty result with nothing inspected becomes `Unknown`, not `AvailableNoEvents`.
+
 ## The rule that matters most
 
 **Empty is not failure.** Three measured cases:

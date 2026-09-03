@@ -20,6 +20,17 @@ package com.rmpsdroid.batterydiagnostics.capability
  * A capability is therefore never inferred from a privilege level. It is established by
  * attempting the operation and classifying what came back.
  *
+ * ## Which layer assigns these
+ *
+ * These are **semantic** states and are assigned by [CapabilityInterpreter], not by the
+ * collection layer. `CollectionResult.outcome()` reports execution mechanics only
+ * (`Data`, `Empty`, `PermissionDenied`, `SourceError`, `ExecutionFailed`, `Unrecognised`).
+ *
+ * The separation exists because [AvailableNoEvents] cannot be concluded from a generic
+ * empty result. Deciding that a source is healthy-but-idle rather than absent requires
+ * knowing what that source looks like when it has something to say, which is capability
+ * knowledge the process layer does not have.
+ *
  * Do not add a convenience `isAvailable` boolean to this type. Callers should handle the
  * cases they can act on; collapsing them is how the information gets lost.
  */

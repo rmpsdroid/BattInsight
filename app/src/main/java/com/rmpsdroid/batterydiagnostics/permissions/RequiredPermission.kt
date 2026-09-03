@@ -42,6 +42,21 @@ enum class RequiredPermission(val manifestName: String, val why: String) {
     ;
 
     /**
+     * Permissions the platform may name alongside this one that we cannot obtain.
+     *
+     * The MATCH_ANY_USER denial names `INTERACT_ACROSS_USERS_FULL` as well, but that
+     * permission does not carry the `development` protection level, so `pm grant` cannot
+     * deliver it to an ordinary application. Phase 1B measured the non-FULL form to be
+     * sufficient on its own. Recording FULL here keeps the platform's wording traceable
+     * without ever offering it as something to grant.
+     */
+    val platformMentionedAlternatives: List<String>
+        get() = when (this) {
+            INTERACT_ACROSS_USERS -> listOf("android.permission.INTERACT_ACROSS_USERS_FULL")
+            else -> emptyList()
+        }
+
+    /**
      * The ADB command that grants this permission.
      *
      * Kept as data rather than presentation text so onboarding can render it per platform
