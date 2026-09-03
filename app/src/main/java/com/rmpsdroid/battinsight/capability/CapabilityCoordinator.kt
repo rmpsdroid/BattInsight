@@ -107,6 +107,12 @@ class CapabilityCoordinator(
             add(usageStatsFinding(permissions))
             add(batteryPropertiesFinding())
             add(uidResolutionFinding())
+            // Every capability carries a finding, including the ones no probe reaches yet.
+            // CapabilityReport.unknown() already promises exactly this before anything is
+            // checked, and a refresh must not make capabilities disappear from the report:
+            // a capability that vanishes reads to the UI as one that does not exist, which
+            // is a claim we have not earned. Unprobed is Unknown, and says so.
+            addAll(unprobedFindings(map { it.capability }.toSet()))
         }
 
         return CapabilityReport(
@@ -118,6 +124,22 @@ class CapabilityCoordinator(
             refreshing = false,
         )
     }
+
+    /**
+     * Fills in the capabilities Phase 3 has no probe for.
+     *
+     * These are not absent and not broken -- nobody has looked. Reporting them as
+     * [CapabilityState.Unknown] with a reason keeps the report complete and keeps the gap
+     * visible, rather than letting a missing row imply a missing capability.
+     */
+    private fun unprobedFindings(alreadyCovered: Set<Capability>): List<CapabilityFinding> =
+        Capability.entries.filterNot { it in alreadyCovered }.map {
+            CapabilityFinding(
+                capability = it,
+                state = CapabilityState.Unknown,
+                reason = "No probe implemented yet",
+            )
+        }
 
     // ------------------------------------------------------------------ backend status
 
@@ -213,7 +235,7 @@ class CapabilityCoordinator(
         val protoState = try {
             val out = runner.run(ProbeCommand.BatteryStatsProto)
             val result = BatteryStatsProbe.toCollectionResult(out, identityKind, SourceFormat.PROTO, clock())
-            BatteryStatsProbe.evaluateProtoAcquisition(result, out.stdout)
+            BatteryStatsProbe.evaluateProtoAcquisition(result, out.stdout, out.truncated)
         } catch (t: Throwable) {
             if (t is kotlinx.coroutines.CancellationException) throw t
             CapabilityState.ExecutionFailed(t.javaClass.simpleName)
@@ -254,10 +276,14 @@ class CapabilityCoordinator(
             val s = CapabilityInterpreter.interpret(outcome)
             CapabilityFinding(Capability.KERNEL_WAKELOCKS, s, describe(s, "Checkin acquisition"), kind)
         } else {
-            // Scan a bounded prefix, then discard. The payload is never retained.
-            val reading = BatteryStatsProbe.scanKernelWakelocks(
-                out.stdoutHead(KERNEL_SCAN_LIMIT),
-            )
+            // Scan the whole capture, then discard it. A prefix will not do: the kwl block
+            // sits at 84-88% of a real payload, so scanning the front finds nothing and
+            // says nothing true. Memory stays bounded by the collection ceiling, and only
+            // one decoded line exists at a time.
+            //
+            // If the capture itself was cut short, a negative reading is inconclusive
+            // rather than evidence that the device has no kernel wakelocks.
+            val reading = BatteryStatsProbe.scanKernelWakelocks(out.stdout, out.truncated)
             val state = CapabilityInterpreter.interpret(outcome, reading)
             CapabilityFinding(Capability.KERNEL_WAKELOCKS, state, describe(state, "Kernel wakelocks"), kind)
         }
@@ -378,6 +404,5 @@ class CapabilityCoordinator(
     private companion object {
         const val CHECKIN_TIMEOUT_MS = 30_000L
         /** Bounded scan: enough to find kwl records without materialising ~800 KB. */
-        const val KERNEL_SCAN_LIMIT = 512 * 1024
     }
 }

@@ -94,12 +94,37 @@ object BatteryStatsProbe {
      * not suspended -- the Android 16 emulator returned 68 such records. That is
      * `AvailableNoEvents`, not a failure.
      *
-     * Reads a bounded prefix; the caller discards the payload afterwards.
+     * Reads a bounded prefix; the caller discards the payload afterwards. [truncated] says
+     * whether that prefix is the whole of what the device produced.
+     *
+     * Truncation only changes a *negative* answer. Finding records proves the source works
+     * however much was read, and the capability claim is "kernel wakelocks are obtainable",
+     * not "this is the complete count". Finding none in a short capture proves nothing at
+     * all, so that case reports [SourceReading.Incomplete] rather than absence.
      */
-    fun scanKernelWakelocks(checkinText: String): SourceReading {
+    fun scanKernelWakelocks(checkinText: String, truncated: Boolean = false): SourceReading =
+        scanKernelWakelocks(checkinText.lineSequence(), truncated)
+
+    /**
+     * Scans a captured checkin payload without materialising it as one string.
+     *
+     * The whole capture must be scanned, not a prefix. Measured on three real captures, the
+     * `kwl` block sits at 84-88% of the payload -- 672 KB into 803 KB on Android 16, 764 KB
+     * into 872 KB on Android 10. A prefix scan finds nothing and, before truncation was
+     * modelled, would have reported that the device has no kernel wakelocks at all.
+     *
+     * Memory stays bounded because only one decoded line exists at a time; the capture
+     * itself is already bounded by the collection ceiling.
+     */
+    fun scanKernelWakelocks(stdout: ByteArray, truncated: Boolean): SourceReading =
+        scanKernelWakelocks(lineSequenceOf(stdout), truncated)
+
+    private fun scanKernelWakelocks(lines: Sequence<String>, truncated: Boolean): SourceReading {
         var total = 0
         var withValues = 0
-        checkinText.lineSequence().forEach { line ->
+        lines.forEach { line ->
+            // Cheap rejection first: the overwhelming majority of lines are not wakelocks.
+            if (!line.contains(KWL_MARKER)) return@forEach
             val fields = splitCheckinLine(line)
             if (fields.size >= 7 && fields[3] == KWL_TAG) {
                 total++
@@ -109,6 +134,11 @@ object BatteryStatsProbe {
             }
         }
         return when {
+            // Finding nothing in a capture that was cut short proves nothing. Reporting
+            // SectionAbsent here would turn our own memory ceiling into a false claim about
+            // the device.
+            total == 0 && truncated ->
+                SourceReading.Incomplete("capture truncated before any kwl record was seen")
             total == 0 -> SourceReading.SectionAbsent
             else -> SourceReading.Records(total = total, withValues = withValues)
         }
@@ -184,18 +214,37 @@ object BatteryStatsProbe {
     )
 
     /**
+     * Whether a truncated capture can still support a conclusion.
+     *
+     * A protobuf whose declared length matches what we received is complete by definition,
+     * so truncation only matters when the framing does not check out.
+     */
+    fun protoTruncationIsFatal(output: ExecutionOutput, shape: ProtoShape): Boolean =
+        output.truncated && shape !is ProtoShape.Valid
+
+    /**
      * Combines classification with structural validation for the protobuf probe.
      *
      * `CollectionResult.classify` only sees a decoded text prefix, which cannot judge
      * binary framing. So a `Data` verdict is confirmed against [looksLikeProto] before
      * acquisition is reported as working.
      */
-    fun evaluateProtoAcquisition(result: CollectionResult, rawStdout: ByteArray): CapabilityState {
+    fun evaluateProtoAcquisition(
+        result: CollectionResult,
+        rawStdout: ByteArray,
+        truncated: Boolean = false,
+    ): CapabilityState {
         val outcome = result.outcome()
         if (outcome !is CollectionOutcome.Data) {
             return CapabilityInterpreter.interpret(outcome)
         }
-        return when (val shape = looksLikeProto(rawStdout)) {
+        val shape = looksLikeProto(rawStdout)
+        // A payload cut short at the ceiling cannot be judged malformed; we simply did not
+        // see all of it.
+        if (truncated && shape !is ProtoShape.Valid) {
+            return CapabilityState.Unknown
+        }
+        return when (shape) {
             is ProtoShape.Valid -> CapabilityState.Available
             ProtoShape.Empty -> CapabilityState.AvailableNoEvents("command produced no protobuf")
             is ProtoShape.TooSmall ->
@@ -205,7 +254,24 @@ object BatteryStatsProbe {
         }
     }
 
+    /** Decodes one line at a time, so a large capture is never held twice. */
+    private fun lineSequenceOf(bytes: ByteArray): Sequence<String> = sequence {
+        var start = 0
+        for (i in bytes.indices) {
+            if (bytes[i] == NEWLINE) {
+                var end = i
+                if (end > start && bytes[end - 1] == CARRIAGE_RETURN) end--
+                yield(String(bytes, start, end - start, Charsets.UTF_8))
+                start = i + 1
+            }
+        }
+        if (start < bytes.size) yield(String(bytes, start, bytes.size - start, Charsets.UTF_8))
+    }
+
+    private const val NEWLINE: Byte = 0x0A
+    private const val CARRIAGE_RETURN: Byte = 0x0D
     private const val KWL_TAG = "kwl"
+    private const val KWL_MARKER = ",kwl,"
     private const val VERS_TAG = "vers"
     private const val MIN_PLAUSIBLE_PROTO_BYTES = 64
     private const val MAX_PRINTABLE_PERCENT = 95

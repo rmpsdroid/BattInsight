@@ -474,4 +474,50 @@ class CapabilityCoordinatorTest {
         assertTrue(r.findings.all { it.state == CapabilityState.Unknown })
         assertTrue(r.usableBackends.isEmpty())
     }
+
+    /**
+     * A refresh must not shrink the report.
+     *
+     * [CapabilityReport.unknown] carries a finding for every capability, on the stated
+     * principle that nothing is assumed absent. If evaluation then returned only the
+     * capabilities Phase 3 happens to probe, six of them would silently disappear from the
+     * UI the moment the user refreshed -- and a missing row reads as a capability that does
+     * not exist, which is a claim we have not earned.
+     */
+    @Test
+    fun `evaluation reports every capability, not only the probed ones`() = runTest {
+        val r = coordinator(scope = TestScope(testScheduler)).evaluate()
+
+        val covered = r.findings.map { it.capability }
+        assertEquals(
+            "missing ${Capability.entries - covered.toSet()}",
+            Capability.entries.toSet(),
+            covered.toSet(),
+        )
+        assertEquals("no capability may appear twice", covered.size, covered.toSet().size)
+        assertEquals(
+            "the initial report and an evaluated report must cover the same ground",
+            CapabilityReport.unknown().findings.map { it.capability }.toSet(),
+            covered.toSet(),
+        )
+    }
+
+    @Test
+    fun `a capability with no probe reports Unknown and says why`() = runTest {
+        val r = coordinator(scope = TestScope(testScheduler)).evaluate()
+
+        // Phase 3 implements no route to these; they must claim nothing either way.
+        listOf(
+            Capability.BATTERY_STATS_HISTORY,
+            Capability.PARTIAL_WAKELOCKS,
+            Capability.ALARMS,
+            Capability.SENSORS,
+            Capability.CPU_AND_PROCESSES,
+            Capability.NETWORK,
+        ).forEach { capability ->
+            val finding = r.finding(capability)!!
+            assertEquals("$capability must be Unknown", CapabilityState.Unknown, finding.state)
+            assertTrue("$capability must explain itself", finding.reason.isNotBlank())
+        }
+    }
 }

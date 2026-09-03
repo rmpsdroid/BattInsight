@@ -49,11 +49,24 @@ class FakeProcessRunner(
         )
     }
 
-    fun on(command: ProbeCommand, exitCode: Int?, stdout: ByteArray, stderr: ByteArray = ByteArray(0)) =
-        apply { responses[command.id] = ExecutionOutput(command, exitCode, stdout, stderr, 1) }
+    fun on(
+        command: ProbeCommand,
+        exitCode: Int?,
+        stdout: ByteArray,
+        stderr: ByteArray = ByteArray(0),
+        truncated: Boolean = false,
+    ) = apply {
+        responses[command.id] =
+            ExecutionOutput(command, exitCode, stdout, stderr, 1, truncated = truncated)
+    }
 
-    fun on(command: ProbeCommand, exitCode: Int?, stdout: String, stderr: String = "") =
-        on(command, exitCode, stdout.toByteArray(), stderr.toByteArray())
+    fun on(
+        command: ProbeCommand,
+        exitCode: Int?,
+        stdout: String,
+        stderr: String = "",
+        truncated: Boolean = false,
+    ) = on(command, exitCode, stdout.toByteArray(), stderr.toByteArray(), truncated)
 
     fun notReady() = apply { ready = false }
 
