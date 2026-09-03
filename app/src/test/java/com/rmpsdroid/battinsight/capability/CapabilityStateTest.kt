@@ -1,4 +1,4 @@
-package com.rmpsdroid.batterydiagnostics.capability
+package com.rmpsdroid.battinsight.capability
 
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue

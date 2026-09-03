@@ -1,7 +1,7 @@
-package com.rmpsdroid.batterydiagnostics.permissions
+package com.rmpsdroid.battinsight.permissions
 
-import com.rmpsdroid.batterydiagnostics.collection.BackendIdentity
-import com.rmpsdroid.batterydiagnostics.collection.SourceFormat
+import com.rmpsdroid.battinsight.collection.BackendIdentity
+import com.rmpsdroid.battinsight.collection.SourceFormat
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue

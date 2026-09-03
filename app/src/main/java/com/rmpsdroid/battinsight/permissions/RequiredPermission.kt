@@ -1,4 +1,4 @@
-package com.rmpsdroid.batterydiagnostics.permissions
+package com.rmpsdroid.battinsight.permissions
 
 /**
  * The privileged permissions the granted-app backend requires.

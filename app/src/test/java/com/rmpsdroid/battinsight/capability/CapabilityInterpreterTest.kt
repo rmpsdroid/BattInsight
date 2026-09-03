@@ -1,6 +1,6 @@
-package com.rmpsdroid.batterydiagnostics.capability
+package com.rmpsdroid.battinsight.capability
 
-import com.rmpsdroid.batterydiagnostics.collection.CollectionOutcome
+import com.rmpsdroid.battinsight.collection.CollectionOutcome
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test

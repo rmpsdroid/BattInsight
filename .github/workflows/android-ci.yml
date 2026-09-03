@@ -1,10 +1,8 @@
-# Android CI.
+# BattInsight CI.
 #
-# No GitHub repository exists yet, so this workflow has never executed remotely. It is
-# committed now so CI is present from the first commit rather than retrofitted.
-#
-# Deliberately absent: signing secrets, release publishing, artifact upload to any external
-# service. Those arrive with the release infrastructure phase, and never with an inherited key.
+# Deliberately absent: signing secrets, release publishing, and artifact upload to any
+# external service. Those arrive with the release infrastructure phase, and never with an
+# inherited key.
 
 name: Android CI
 

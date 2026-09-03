@@ -5,9 +5,7 @@ plugins {
 }
 
 android {
-    // PROVISIONAL PRE-RELEASE IDENTITY.
-    // The final brand and package name have NOT been chosen. See docs/provenance.md.
-    namespace = "com.rmpsdroid.batterydiagnostics"
+    namespace = "com.rmpsdroid.battinsight"
 
     // compileSdk and targetSdk are deliberately different, and the distinction matters.
     //
@@ -21,7 +19,7 @@ android {
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "com.rmpsdroid.batterydiagnostics"
+        applicationId = "com.rmpsdroid.battinsight"
         minSdk = 33      // Android 13. Phase 0 product floor. Do not raise without evidence.
         targetSdk = 36
         versionCode = 1

@@ -1,4 +1,4 @@
-package com.rmpsdroid.batterydiagnostics.collection
+package com.rmpsdroid.battinsight.collection
 
 /**
  * The identity a [PrivilegeBackend] actually executes as.

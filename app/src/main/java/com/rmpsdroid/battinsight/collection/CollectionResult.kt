@@ -1,4 +1,4 @@
-package com.rmpsdroid.batterydiagnostics.collection
+package com.rmpsdroid.battinsight.collection
 
 /**
  * Metadata describing one acquisition attempt.

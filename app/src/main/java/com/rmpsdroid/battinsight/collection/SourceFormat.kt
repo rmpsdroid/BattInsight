@@ -1,4 +1,4 @@
-package com.rmpsdroid.batterydiagnostics.collection
+package com.rmpsdroid.battinsight.collection
 
 /**
  * An acquisition format for battery statistics.

@@ -1,8 +1,8 @@
-package com.rmpsdroid.batterydiagnostics.app
+package com.rmpsdroid.battinsight.app
 
 import android.os.Bundle
 import androidx.appcompat.app.AppCompatActivity
-import com.rmpsdroid.batterydiagnostics.R
+import com.rmpsdroid.battinsight.R
 
 /**
  * Placeholder foundation screen.

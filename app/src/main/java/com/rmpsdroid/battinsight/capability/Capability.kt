@@ -1,4 +1,4 @@
-package com.rmpsdroid.batterydiagnostics.capability
+package com.rmpsdroid.battinsight.capability
 
 /**
  * The distinct things the application may be able to observe.

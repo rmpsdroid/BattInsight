@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- PROVISIONAL PRE-RELEASE NAME. The final brand has not been chosen. -->
-    <string name="app_name">Battery Diagnostics</string>
+    <string name="app_name">BattInsight</string>
     <string name="foundation_notice">Development foundation build</string>
 </resources>

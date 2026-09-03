@@ -1,0 +1,41 @@
+name: Feature request
+description: Suggest a capability or improvement
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please check the **Planned** table in the
+        [README](https://github.com/rmpsdroid/BattInsight#planned) first — much of what you
+        might ask for is already intended but not yet built. If so, adding your use case to
+        the existing discussion is more useful than a new issue.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe the situation you are in, not just the feature you want. Understanding the underlying problem often changes the best solution.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like it to do?
+    validations:
+      required: true
+
+  - type: input
+    id: devices
+    attributes:
+      label: Relevant Android versions or devices
+      description: If this is specific to a manufacturer or Android version, say which.
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you have considered
+    validations:
+      required: false

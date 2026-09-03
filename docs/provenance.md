@@ -2,7 +2,7 @@
 
 `SPDX-License-Identifier: GPL-3.0-only`
 
-Full detail is in [`../NOTICE-DRAFT.md`](../NOTICE-DRAFT.md). This is the short version.
+Full detail is in [`../NOTICE.md`](../NOTICE.md). This is the short version.
 
 ## Independent
 
@@ -25,7 +25,7 @@ read as market research, the only legitimate use available.
 ## Reuse is closed by default
 
 The default is **write fresh code**. Importing any Apache-licensed file would require a
-separate explicit decision plus the compliance steps in `NOTICE-DRAFT.md` section 7.
+separate explicit decision plus the compliance steps in `NOTICE.md` section 7.
 
 Two findings keep the bar high:
 
@@ -38,8 +38,7 @@ Two findings keep the bar high:
 
 ## Naming
 
-**"Battery Diagnostics" is a provisional working name**, as is
-`com.rmpsdroid.batterydiagnostics`. Neither is final.
+The product is **BattInsight**, package `com.rmpsdroid.battinsight`.
 
 Not used as branding: `BetterBatteryStats` and `Better Battery Stats` (explicitly excluded
 from the upstream Apache grant), the original icon and artwork (also excluded), and, as

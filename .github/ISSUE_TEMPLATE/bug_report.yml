@@ -1,0 +1,97 @@
+name: Bug report
+description: Report something that behaves incorrectly
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Before filing:** BattInsight is early foundation work. Battery statistics
+        collection, wakelock analysis, sessions and the access backends are **not
+        implemented yet**, so please check the [project status](https://github.com/rmpsdroid/BattInsight#status)
+        first — a missing feature is not a bug.
+
+        **Please do not paste diagnostic dumps or logs containing your installed
+        application list, usage history or account information.** Describe the problem in
+        words. If a redacted diagnostic bundle is ever needed, the project will ask for it
+        in a specific format designed for sharing.
+
+  - type: input
+    id: version
+    attributes:
+      label: BattInsight version or commit
+      description: Version name, or the commit SHA you built from.
+      placeholder: "0.0.1-foundation, or commit 38f8501"
+    validations:
+      required: true
+
+  - type: input
+    id: android
+    attributes:
+      label: Android version
+      placeholder: "Android 16 (API 36)"
+    validations:
+      required: true
+
+  - type: input
+    id: device
+    attributes:
+      label: Device manufacturer and model
+      placeholder: "Google Pixel 8, or Samsung SM-S911B"
+    validations:
+      required: true
+
+  - type: input
+    id: rom
+    attributes:
+      label: ROM or build (if known)
+      description: Stock, LineageOS, /e/OS, a build fingerprint — whatever you know.
+      placeholder: "Stock One UI 7, or LineageOS 22"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Access backend
+      description: How the app was obtaining data, once backends exist.
+      options:
+        - Not applicable / no backend implemented yet
+        - ADB-granted permissions
+        - Shizuku
+        - Unsure
+    validations:
+      required: false
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open the app
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: Include any exact error text shown on screen.
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Screenshots are helpful — please crop or blank out anything you would rather not publish.
+    validations:
+      required: false

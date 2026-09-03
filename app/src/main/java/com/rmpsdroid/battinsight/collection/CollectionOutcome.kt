@@ -1,4 +1,4 @@
-package com.rmpsdroid.batterydiagnostics.collection
+package com.rmpsdroid.battinsight.collection
 
 /**
  * What happened when a collection was attempted, at the transport and process level.
@@ -11,7 +11,7 @@ package com.rmpsdroid.batterydiagnostics.collection
  *
  * The distinction matters most for emptiness. An empty result from a successful process is
  * simply [Empty]; whether that is a correctly-idle source, a missing section, or a silent
- * refusal is not knowable here. `com.rmpsdroid.batterydiagnostics.capability.CapabilityInterpreter`
+ * refusal is not knowable here. `com.rmpsdroid.battinsight.capability.CapabilityInterpreter`
  * makes that call with the extra evidence needed to make it honestly.
  */
 sealed interface CollectionOutcome {

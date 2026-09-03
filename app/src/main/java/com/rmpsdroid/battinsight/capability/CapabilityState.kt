@@ -1,4 +1,4 @@
-package com.rmpsdroid.batterydiagnostics.capability
+package com.rmpsdroid.battinsight.capability
 
 /**
  * What the application can actually do right now, for one [Capability].

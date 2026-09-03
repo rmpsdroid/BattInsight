@@ -1,6 +1,6 @@
-package com.rmpsdroid.batterydiagnostics.capability
+package com.rmpsdroid.battinsight.capability
 
-import com.rmpsdroid.batterydiagnostics.collection.CollectionOutcome
+import com.rmpsdroid.battinsight.collection.CollectionOutcome
 
 /**
  * What a capability-specific reader found inside a collection that succeeded.

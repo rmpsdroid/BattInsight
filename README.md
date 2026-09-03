@@ -1,63 +1,89 @@
-# Battery Diagnostics
+# BattInsight
 
-> ## ⚠️ PRE-RELEASE DEVELOPMENT PROJECT
->
-> This is not a released application. There is no build to install and no feature works yet.
->
-> **"Battery Diagnostics" is a temporary project name.** The final brand, the public
-> repository name and the package identifier `com.rmpsdroid.batterydiagnostics` are all
-> **provisional placeholders** chosen so the project can compile. None has been decided.
+BattInsight is an open-source Android battery diagnostics project focused on transparent,
+testable analysis of battery and power behaviour.
 
-An Android battery diagnostics application: what drained your battery between charges, and
-why. Independent reimplementation, currently at the foundation stage.
+[![Android CI](https://github.com/rmpsdroid/BattInsight/actions/workflows/android-ci.yml/badge.svg)](https://github.com/rmpsdroid/BattInsight/actions/workflows/android-ci.yml)
+[![License: GPL v3](https://img.shields.io/badge/License-GPL%203.0--only-blue.svg)](LICENSE)
+
+---
+
+> ## ⚠️ Early development — not yet ready for daily use
+>
+> There is no release, no installable build, and **no diagnostic feature works yet**.
+>
+> What exists today is foundation and architecture work: the build chain, the package
+> structure, the contracts that model how data will be acquired, and the tests that hold
+> those contracts to measured platform behaviour. The application launches and shows a
+> placeholder screen.
+>
+> **BattInsight is not currently a replacement for any existing battery statistics
+> application.**
+
+---
+
+## Why this project
+
+Android tells you *that* your battery drained. It is much harder to find out *what* drained
+it — which wakelocks fired, which alarms woke the device, which app kept the CPU busy while
+the screen was off.
+
+Tools that answered this well have become unavailable: the widely used open-source option
+was archived, and its successor is closed-source. BattInsight is an independent
+reimplementation, built from direct measurement of what current Android actually permits an
+application to observe.
+
+The emphasis is on being **honest about what it can and cannot see**. A diagnostics tool
+that silently shows an empty screen when it lacks access is worse than one that says so.
 
 ---
 
 ## Status
 
-**Phase 2A — project foundation.** The build chain, package structure, architectural
-contracts, tests, lint gate and documentation exist. No product feature does.
+### Implemented
 
-| | |
+- Project foundation: Kotlin, modern Gradle/AGP build chain, CI, lint as a build gate
+- Architectural contracts for data acquisition, backend identity and capability state
+- A capability model that distinguishes *available*, *available but idle*, *available but
+  incomplete*, *permission missing*, *not supported by this device*, *source unavailable*,
+  *execution failed* and *unknown* — because collapsing those is what produces
+  uninformative empty screens
+- 39 unit tests covering the classification rules, written against platform output captured
+  from real measurement
+
+### Planned
+
+None of the following exists yet.
+
+| Area | Planned capability |
 |---|---|
-| Builds | ✅ `assembleDebug` |
-| Tests | ✅ 39 unit tests |
-| Lint | ✅ passes with `abortOnError = true` |
-| Installable | Yes, but shows only a placeholder screen |
-| Useful | Not yet |
+| Battery statistics | Aggregate collection and parsing |
+| Wakelocks | Partial (per-application) wakelock attribution |
+| Kernel wakelocks | Kernel wakelock attribution |
+| Alarms | Alarm and scheduled-job attribution |
+| Sessions | Charge/discharge session tracking that survives reboots and process death |
+| Diagnostics | A redacted diagnostic bundle for troubleshooting |
+| ADB-granted backend | Collection using permissions granted over ADB |
+| Shizuku backend | Collection via a Shizuku shell session, needing no privileged app permissions |
+| Reports and export | Structured, machine-readable export |
 
-### Deliberately not implemented yet
-
-Battery statistics collection · checkin parser · protobuf decoder · Shizuku integration ·
-permission granting · root support · persistence schema · charging state machine · battery
-sessions · wakelock UI · charts · exports · notifications · widgets · battery health.
+The roadmap deliberately puts correctness of session and snapshot handling ahead of
+features and UI.
 
 ---
 
-## What has been established
+## Design principles
 
-Four investigation phases preceded this code. Their measured findings — not assumptions —
-shape the contracts in `app/src/main/java/.../`:
-
-- **Battery statistics are reachable two ways**, and both were measured producing
-  structurally identical output: an ordinary app granted three permissions, or a Shizuku
-  shell session needing none of them.
-- **The minimum permission set is three, not four.** `DUMP`, `PACKAGE_USAGE_STATS` and
-  `INTERACT_ACROSS_USERS`. `BATTERY_STATS` was measured **unnecessary** despite both
-  predecessor applications requesting it.
-- **Kernel wakelocks work without root or debugfs**, via battery statistics rather than
-  the `/sys` and `/proc` paths the archived predecessor used, which were unreadable on
-  every environment tested.
-- **Every failure mode returns exit status 0.** Permission denials arrive on stdout;
-  `UsageStatsManager` returns an empty list rather than throwing. Content is examined
-  before the exit code — though a non-zero exit is still real evidence of failure and is
-  used as such.
-- **Execution mechanics and capability meaning are separate layers.** `CollectionOutcome`
-  reports what a process did; `CapabilityInterpreter` decides what that means for a given
-  data source. An empty result is only "healthy but idle" when something has looked inside
-  and found a present-but-quiet source — the process layer cannot know that.
-
-Full detail lives in the phase reports outside this repository.
+- **Local-first.** No telemetry, no analytics, no network stack. The application does not
+  declare the `INTERNET` permission. See [PRIVACY.md](PRIVACY.md).
+- **Capability is measured, not assumed.** Whether something works is established by
+  attempting it and classifying the result, never inferred from a privilege level.
+- **Multiple access backends behind one interface.** Measurement showed an ADB-granted app
+  and a Shizuku shell session produce equivalent data, so both are treated as
+  interchangeable implementations rather than one being a fallback.
+- **Empty is not failure.** A source with nothing to report and a source that is absent are
+  different states and must stay distinguishable.
+- **Session correctness over cosmetics.** Historical data is never silently discarded.
 
 ---
 
@@ -65,26 +91,36 @@ Full detail lives in the phase reports outside this repository.
 
 | | |
 |---|---|
+| Planned minimum | Android 13 (API 33) |
+| Language | Kotlin |
 | JDK | 17 |
-| Gradle | 9.7.1 (via wrapper — do not install separately) |
+| Gradle | 9.7.1 (via the wrapper) |
 | Android Gradle Plugin | 9.4.0 |
-| Kotlin | supplied by AGP built-in Kotlin |
-| compileSdk | 37 |
-| targetSdk | 36 |
-| minSdk | 33 (Android 13) |
+| compileSdk / targetSdk | 37 / 36 |
 
-`compileSdk` and `targetSdk` differ deliberately: we compile against the newest API surface
-but only opt into runtime behaviour we have measured. See `app/build.gradle.kts`.
+`compileSdk` and `targetSdk` differ deliberately: the project compiles against the newest
+API surface but only opts into runtime behaviour that has been measured.
 
 ## Building
 
 ```bash
 ./gradlew assembleDebug      # build
 ./gradlew testDebugUnitTest  # unit tests
-./gradlew lintDebug          # lint (a real gate; abortOnError is on)
+./gradlew lintDebug          # lint (a build gate; abortOnError is enabled)
 ```
 
-No signing configuration exists and none will use an inherited key.
+No signing configuration exists.
+
+---
+
+## Compatibility
+
+**No broad compatibility claims are made.** Behaviour has so far been measured on an
+Android 16 emulator and on a single Android 10 physical device, and Android 10 is below the
+planned minimum. Behaviour on other Android versions, and on manufacturer software from
+Samsung, OnePlus, OPPO and others, is **not yet verified on real hardware**.
+
+Emulator results are not treated as evidence about physical devices.
 
 ---
 
@@ -93,13 +129,19 @@ No signing configuration exists and none will use an inherited key.
 | Document | Covers |
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | Layering and why the boundaries sit where they do |
-| [docs/capabilities.md](docs/capabilities.md) | The capability state model and why eight states |
-| [docs/data-sources.md](docs/data-sources.md) | Acquisition formats, prohibited commands, UID name resolution |
-| [docs/session-model.md](docs/session-model.md) | Charging and session ownership (design only) |
-| [docs/security-privacy.md](docs/security-privacy.md) | Local-first defaults and what is not declared |
+| [docs/capabilities.md](docs/capabilities.md) | The capability state model |
+| [docs/data-sources.md](docs/data-sources.md) | Acquisition formats and prohibited commands |
+| [docs/session-model.md](docs/session-model.md) | Charge/discharge session ownership (design) |
+| [docs/security-privacy.md](docs/security-privacy.md) | Security and privacy posture in detail |
 | [docs/provenance.md](docs/provenance.md) | Relationship to prior work |
 | [docs/development.md](docs/development.md) | Build chain notes and conventions |
-| [NOTICE-DRAFT.md](NOTICE-DRAFT.md) | Provenance and third-party licences |
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Bug reports and questions are welcome, though the
+project is early enough that most features simply do not exist yet.
+
+Security reports: see [SECURITY.md](SECURITY.md).
 
 ---
 
@@ -111,24 +153,10 @@ No signing configuration exists and none will use an inherited key.
 SPDX-License-Identifier: GPL-3.0-only
 ```
 
-Version 3 **only**. No "or later" grant is offered; adopting a future GPL version would be
-a fresh decision, not an automatic one.
-
-Copyleft is a deliberate choice. The archived predecessor was permissively licensed, and
-its author closed the successor's source specifically because forks reused its name and
-artwork. GPL-3.0 requires derivative works to remain open, and still accepts Apache-2.0
-code inbound should we ever import any.
+Version 3 **only**; no "or later" grant is offered.
 
 ## Relationship to prior work
 
-This project is **independent** and **not affiliated with, endorsed by, or supported by**
-the authors of BetterBatteryStats or BBS Reloaded.
-
-No source from either has been copied. BBS Reloaded is closed-source and was never
-decompiled. See [NOTICE-DRAFT.md](NOTICE-DRAFT.md).
-
-## Compatibility
-
-Only Android 16 (emulator) and Android 10 (one physical device) have been measured, and
-Android 10 is below the supported floor. **No claim is made about any other Android
-version or manufacturer** until measured on real hardware.
+BattInsight is **independent** and **not affiliated with, endorsed by, or supported by** the
+authors of BetterBatteryStats or BBS Reloaded. No source from either has been copied, and
+the closed-source successor was never decompiled. Full detail in [NOTICE.md](NOTICE.md).
