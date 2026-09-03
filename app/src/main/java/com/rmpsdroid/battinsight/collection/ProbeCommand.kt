@@ -102,6 +102,14 @@ data class ExecutionOutput(
     val stderr: ByteArray,
     val durationMillis: Long,
     val timedOut: Boolean = false,
+    /**
+     * Whether the capture ceiling stopped us before the stream ended.
+     *
+     * Carried alongside the payload because absence of evidence in a short capture is not
+     * evidence of absence: the capability layer must be able to answer *unknown* rather
+     * than claim a section is missing when we simply stopped reading.
+     */
+    val truncated: Boolean = false,
 ) {
     val stdoutBytes: Int get() = stdout.size
     val stderrBytes: Int get() = stderr.size
@@ -121,16 +129,17 @@ data class ExecutionOutput(
     /** Metadata only. Never includes payload bytes, so it is safe to log. */
     override fun toString(): String =
         "ExecutionOutput(${command.id}, exit=$exitCode, out=${stdout.size}B, " +
-            "err=${stderr.size}B, ${durationMillis}ms, timedOut=$timedOut)"
+            "err=${stderr.size}B, ${durationMillis}ms, timedOut=$timedOut, truncated=$truncated)"
 
     override fun equals(other: Any?): Boolean =
         this === other || (other is ExecutionOutput && command == other.command &&
             exitCode == other.exitCode && stdout.contentEquals(other.stdout) &&
-            stderr.contentEquals(other.stderr) && timedOut == other.timedOut)
+            stderr.contentEquals(other.stderr) && timedOut == other.timedOut &&
+            truncated == other.truncated)
 
     override fun hashCode(): Int =
-        (((command.hashCode() * 31 + (exitCode ?: 0)) * 31 + stdout.contentHashCode()) * 31 +
-            stderr.contentHashCode()) * 31 + timedOut.hashCode()
+        ((((command.hashCode() * 31 + (exitCode ?: 0)) * 31 + stdout.contentHashCode()) * 31 +
+            stderr.contentHashCode()) * 31 + timedOut.hashCode()) * 31 + truncated.hashCode()
 
     companion object {
         const val CLASSIFY_LIMIT: Int = 4096

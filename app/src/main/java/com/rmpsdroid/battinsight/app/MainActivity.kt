@@ -19,7 +19,7 @@ import com.rmpsdroid.battinsight.platform.AndroidPermissionStateReader
 import com.rmpsdroid.battinsight.platform.AndroidShizukuGateway
 import com.rmpsdroid.battinsight.platform.AndroidUsageAccessSource
 import com.rmpsdroid.battinsight.platform.GrantedAppProcessRunner
-import com.rmpsdroid.battinsight.platform.ShizukuProcessRunner
+import com.rmpsdroid.battinsight.shizuku.ShizukuUserServiceRunner
 import kotlinx.coroutines.flow.StateFlow
 
 /**
@@ -32,9 +32,12 @@ class CapabilityViewModel(context: android.content.Context) : ViewModel() {
 
     private val gateway = AndroidShizukuGateway(context)
 
+    /** Bound on demand and released with the ViewModel, so nothing outlives the screen. */
+    private val shizukuRunner = ShizukuUserServiceRunner(context, gateway)
+
     private val coordinator = CapabilityCoordinator(
         grantedAppRunner = GrantedAppProcessRunner(),
-        shizukuRunner = ShizukuProcessRunner(gateway),
+        shizukuRunner = shizukuRunner,
         shizukuGateway = gateway,
         permissionReader = AndroidPermissionStateReader(context),
         batterySource = AndroidBatteryPropertySource(context),
@@ -50,6 +53,11 @@ class CapabilityViewModel(context: android.content.Context) : ViewModel() {
     }
 
     fun refresh() = coordinator.refresh()
+
+    /** Releases the bound user service, so no privileged process outlives this screen. */
+    override fun onCleared() {
+        shizukuRunner.release()
+    }
 
     class Factory(private val context: android.content.Context) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")

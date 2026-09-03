@@ -49,6 +49,8 @@ android {
 
     buildFeatures {
         compose = true
+        // The Shizuku UserService contract is a typed Binder interface.
+        aidl = true
     }
 
     lint {
