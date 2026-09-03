@@ -2,6 +2,7 @@ plugins {
     // AGP 9.x provides built-in Kotlin support. The org.jetbrains.kotlin.android plugin
     // must NOT be applied -- AGP rejects it outright. See docs/development.md.
     alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.compose)
 }
 
 android {
@@ -46,6 +47,10 @@ android {
     // Kotlin jvmTarget is supplied by AGP's built-in Kotlin support and follows
     // compileOptions. AGP 9.x removed the kotlinOptions block.
 
+    buildFeatures {
+        compose = true
+    }
+
     lint {
         // Lint is a real gate. Do not set abortOnError = false.
         abortOnError = true
@@ -62,6 +67,16 @@ android {
 
 dependencies {
     implementation(libs.androidx.core.ktx)
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.compose.ui)
+    implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.compose.ui.tooling.preview)
+    debugImplementation(libs.androidx.compose.ui.tooling)
+    implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.shizuku.api)
+    implementation(libs.shizuku.provider)
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.activity)
     implementation(libs.androidx.lifecycle.runtime)
