@@ -1,0 +1,10 @@
+# Normalise line endings so the tree is identical on Windows, Linux and CI.
+* text=auto eol=lf
+
+# Binary and executable-sensitive files.
+*.jar binary
+*.apk binary
+*.aab binary
+*.png binary
+gradlew text eol=lf
+gradlew.bat text eol=crlf

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Backup is disabled at the application level (allowBackup="false").
+  This file documents the intent should backup ever be enabled: battery statistics and any
+  diagnostic output must never be cloud backed up. Restoring another device's snapshots
+  would also corrupt session identity, since boot IDs and counters would not match.
+  Phase 0 section O recorded the reference implementation backing up its entire sandbox.
+-->
+<full-backup-content>
+    <exclude domain="database" path="." />
+    <exclude domain="sharedpref" path="." />
+    <exclude domain="file" path="." />
+    <exclude domain="external" path="." />
+</full-backup-content>

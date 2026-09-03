@@ -1,0 +1,62 @@
+# Android CI.
+#
+# No GitHub repository exists yet, so this workflow has never executed remotely. It is
+# committed now so CI is present from the first commit rather than retrofitted.
+#
+# Deliberately absent: signing secrets, release publishing, artifact upload to any external
+# service. Those arrive with the release infrastructure phase, and never with an inherited key.
+
+name: Android CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build, test and lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Assemble debug
+        run: ./gradlew --no-daemon assembleDebug
+
+      - name: Unit tests
+        run: ./gradlew --no-daemon testDebugUnitTest
+
+      # Lint is a gate: abortOnError is true, so a violation fails the job.
+      - name: Lint
+        run: ./gradlew --no-daemon lintDebug
+
+      - name: Upload reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reports
+          path: |
+            app/build/reports/
+            app/build/test-results/
+          retention-days: 7

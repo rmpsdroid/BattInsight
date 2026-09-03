@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      PHASE 2A FOUNDATION MANIFEST.
+
+      NO permissions are declared. This is deliberate.
+
+      The granted-app backend will eventually need DUMP, PACKAGE_USAGE_STATS and
+      INTERACT_ACROSS_USERS (the measured minimum set, see RequiredPermission.kt), but no
+      code uses them yet, and declaring a privileged permission before the feature exists
+      is how manifests accumulate permissions nobody can justify. They are added in
+      Phase 3/4 alongside the backend that needs them.
+
+      Explicitly NOT declared, and not to be added without a separate decision:
+        INTERNET            : the application is local first and needs no network
+        QUERY_ALL_PACKAGES  : Play policy sensitive; belongs to the UID name resolution
+                              investigation recorded in docs/data-sources.md
+        BATTERY_STATS       : measured NOT required in Phase 1B
+        READ_LOGS, location, storage : no feature requires them
+    -->
+
+    <application
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@android:drawable/ic_menu_info_details"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.AppCompat.DayNight.NoActionBar">
+
+        <!--
+          The only exported component, as a launcher entry requires.
+          No other component is exported and no FileProvider is declared.
+        -->
+        <activity
+            android:name=".app.MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>

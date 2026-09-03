@@ -1,0 +1,51 @@
+# Written for this project. Deliberately NOT copied from any other repository --
+# the archived predecessor's .gitignore did not prevent encrypted release keystores
+# from being committed to its tree.
+
+# ---- secrets and signing ----
+# Nothing matching these should ever exist here, but the guard is cheap.
+local.properties
+*.jks
+*.keystore
+*.keystore-cipher
+*.p12
+*.pem
+*.key
+secrets.properties
+keystore.properties
+signing.properties
+*-cipher
+secret-env*
+google-services.json
+service-account*.json
+sa-*.json
+.env
+.env.*
+
+# ---- build output ----
+build/
+*/build/
+.gradle/
+.kotlin/
+captures/
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+local.log
+
+# ---- IDE / machine state ----
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# ---- test / tooling output ----
+*.hprof
+.cxx/
+lint-results*.html
+lint-results*.xml
+lint-results*.sarif
