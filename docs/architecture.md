@@ -15,7 +15,7 @@ upgrade there once deleted every user's history.
 | **Domain** | Normalise raw output into stable value types | Not started |
 | **Session engine** | Snapshot identity, session boundaries, comparability, reconciliation | Not started. See `session-model.md` |
 | **Persistence** | Store snapshots durably with explicit schema versioning | Not started |
-| **Presentation** | Screens, chart models, reports | Placeholder activity only |
+| **Presentation** | Screens, chart models, reports | Capability Centre (Compose) |
 
 Packages exist only where they hold real code. Empty packages were not created to complete
 a diagram.
@@ -58,3 +58,21 @@ and tested against a fake.
 | Dependency injection | When manual wiring hurts | Constructor injection covers swapping backends in tests |
 | Room schema | Phase 6 | No domain model to persist yet |
 | Routine acquisition format | Phase 7 | See `data-sources.md` |
+
+---
+
+## Command safety
+
+The application will eventually run commands with elevated identity through Shizuku, so
+there is deliberately **no** `execute(command: String)` in the public surface. Callers pick
+a `ProbeCommand` from a sealed whitelist, and only that file maps one to an argument vector.
+UI code cannot construct a command and nothing user-supplied reaches a process.
+
+Four commands exist, all read-only: `id`, `id -Z`, `dumpsys batterystats --proto`, and
+`dumpsys batterystats -c`. Adding one is a reviewable change to a single file, and tests
+assert that no state-changing argument can appear.
+
+Execution enforces a timeout, honours cancellation, captures stdout and stderr separately,
+and records a nullable exit code — nullable because a process that never completed has no
+exit status, and conflating that with "exited 0" is the mistake the whole architecture
+exists to avoid. Captured output is bounded; payloads are never logged.

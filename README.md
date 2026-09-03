@@ -10,12 +10,12 @@ testable analysis of battery and power behaviour.
 
 > ## ⚠️ Early development — not yet ready for daily use
 >
-> There is no release, no installable build, and **no diagnostic feature works yet**.
+> There is no release, and **no battery diagnostic feature works yet**.
 >
-> What exists today is foundation and architecture work: the build chain, the package
-> structure, the contracts that model how data will be acquired, and the tests that hold
-> those contracts to measured platform behaviour. The application launches and shows a
-> placeholder screen.
+> What exists today is the capability architecture: the application can determine which
+> access backends are usable, which permissions are held, and whether battery statistics
+> can actually be acquired in the current environment — and it shows that in a Capability
+> Centre screen. It does not yet collect, parse, store or display any battery data.
 >
 > **BattInsight is not currently a replacement for any existing battery statistics
 > application.**
@@ -43,13 +43,23 @@ that silently shows an empty screen when it lacks access is worse than one that 
 ### Implemented
 
 - Project foundation: Kotlin, modern Gradle/AGP build chain, CI, lint as a build gate
-- Architectural contracts for data acquisition, backend identity and capability state
+- **Runtime capability detection** — what the app can actually do is established by
+  attempting operations and classifying the result, never inferred from an installed
+  package or a permission flag
+- **Granted-app backend inspection** — per-permission state for the three permissions the
+  platform actually requires, and a behavioural check that acquisition works
+- **Shizuku availability and identity detection** — installed, running and authorised are
+  three separate states, and the execution identity is measured rather than assumed
+- **Capability Centre** — a screen showing each backend, permission and capability with a
+  specific reason for its state
 - A capability model that distinguishes *available*, *available but idle*, *available but
   incomplete*, *permission missing*, *not supported by this device*, *source unavailable*,
   *execution failed* and *unknown* — because collapsing those is what produces
   uninformative empty screens
-- 39 unit tests covering the classification rules, written against platform output captured
-  from real measurement
+- 81 unit tests, written against platform output captured from real measurement
+
+**No battery diagnostics are implemented.** The application can tell you whether it *could*
+collect data; it does not yet collect, parse, store or display any.
 
 ### Planned
 
@@ -57,7 +67,7 @@ None of the following exists yet.
 
 | Area | Planned capability |
 |---|---|
-| Battery statistics | Aggregate collection and parsing |
+| Battery statistics | Aggregate collection and parsing (acquisition is verified; no parser yet) |
 | Wakelocks | Partial (per-application) wakelock attribution |
 | Kernel wakelocks | Kernel wakelock attribution |
 | Alarms | Alarm and scheduled-job attribution |

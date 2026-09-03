@@ -86,3 +86,27 @@ at all**.
 sysfs battery nodes are not a viable baseline: every node was permission-denied on the one
 physical device measured, and `charge_full_design` — required for a health percentage —
 did not exist on the emulator. Advanced battery health remains speculative and low priority.
+
+---
+
+## What the capability layer probes today
+
+Acquisition is verified behaviourally, not assumed from permissions:
+
+| Probe | Command | What it establishes |
+|---|---|---|
+| Battery statistics | `dumpsys batterystats --proto` | Whether acquisition works at all |
+| Kernel wakelocks | `dumpsys batterystats -c` | Whether `kwl` records exist, and whether any carry values |
+
+Protobuf is the routine probe because it was measured at roughly one ninth the size of
+checkin and about twice as fast. Validation is **structural only** — the length-delimited
+framing is checked and the payload discarded. No production decoder exists yet, and a
+non-empty protobuf establishes only that *acquisition* works, never that every field is
+populated.
+
+Checkin is used solely for kernel wakelocks, where the `kwl` records are greppable as text
+and reading them from protobuf would require the decoder that is deliberately deferred. The
+payload is scanned within a bounded prefix and then discarded.
+
+The retired sysfs sources — `/proc/wakelocks`, `/sys/kernel/debug/wakeup_sources`,
+`/sys/class/wakeup` — are **not** used and are not resurrected. Measurement retired them.
