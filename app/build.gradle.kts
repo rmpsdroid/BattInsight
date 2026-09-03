@@ -64,6 +64,15 @@ android {
 
     testOptions {
         unitTests.isReturnDefaultValues = true
+        // Real device captures are deliberately not in this repository -- they are ~15 MB
+        // of the maintainer's own device state. RealFixtureValidationTest runs against them
+        // when an archive is pointed at with -Dbattinsight.fixtures=..., and is skipped
+        // otherwise, which is what CI does.
+        unitTests.all { test ->
+            providers.systemProperty(FIXTURE_ARCHIVE_PROPERTY).orNull?.let { path ->
+                test.systemProperty(FIXTURE_ARCHIVE_PROPERTY, path)
+            }
+        }
     }
 }
 
@@ -88,3 +97,6 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
 }
+
+/** Points RealFixtureValidationTest at an out-of-tree archive of real device captures. */
+val FIXTURE_ARCHIVE_PROPERTY = "battinsight.fixtures"
