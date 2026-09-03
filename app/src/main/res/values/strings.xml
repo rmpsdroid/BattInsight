@@ -1,5 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">BattInsight</string>
-    <string name="foundation_notice">Development foundation build</string>
 </resources>
