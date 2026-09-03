@@ -25,6 +25,11 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "0.0.1-foundation"
+
+        // Instrumented tests are how the Shizuku backend is validated against a real
+        // platform. Nothing about the capability architecture can be proven on the JVM
+        // alone -- binder lifecycle, SELinux domain and the shell UID are runtime facts.
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
@@ -96,6 +101,11 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+
+    androidTestImplementation(libs.junit)
+    androidTestImplementation(libs.kotlinx.coroutines.test)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.ext.junit)
 }
 
 /** Points RealFixtureValidationTest at an out-of-tree archive of real device captures. */

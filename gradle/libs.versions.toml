@@ -10,6 +10,8 @@ activity = "1.13.0"
 lifecycle = "2.11.0"
 coroutines = "1.11.0"
 junit = "4.13.2"
+androidxTestRunner = "1.7.0"
+androidxTestExtJunit = "1.3.0"
 # Shizuku: official project (github.com/RikkaApps/Shizuku). 13.1.5 is current stable.
 shizuku = "13.1.5"
 # Compose BOM pins every Compose artifact to one tested set.
@@ -27,6 +29,8 @@ androidx-lifecycle-runtime = { group = "androidx.lifecycle", name = "lifecycle-r
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutines" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
+androidx-test-runner = { group = "androidx.test", name = "runner", version.ref = "androidxTestRunner" }
+androidx-test-ext-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxTestExtJunit" }
 
 # Shizuku -- official API and provider. No root APIs, no Sui.
 shizuku-api = { group = "dev.rikka.shizuku", name = "api", version.ref = "shizuku" }
