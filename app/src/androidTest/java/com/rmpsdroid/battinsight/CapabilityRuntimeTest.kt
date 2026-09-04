@@ -131,21 +131,26 @@ class CapabilityRuntimeTest {
     }
 
     /**
-     * The three permissions must still be missing. If this ever fails, a test granted them,
-     * and every denial path below became untestable.
+     * Observing must never change what BattInsight holds.
+     *
+     * Phase 3.1 stated this as "the three permissions are always missing", which was true
+     * while nothing in the product could grant them. Phase 4 added a deliberate, opt-in
+     * grant flow, so an absolute assertion would now fail for a legitimate reason and say
+     * nothing useful. The property actually worth defending is unchanged and is asserted
+     * directly: everything in this class reads, and reading moves nothing.
      */
     @Test
-    fun theRequiredPermissionsAreNotGrantedByAnyTest() = runBlocking {
-        val snapshot = AndroidPermissionStateReader(context).read()
-        Log.i(TAG, "permission snapshot: " + snapshot)
-        assertTrue(
-            "Phase 3.1 must not grant DUMP",
-            RequiredPermission.DUMP in snapshot.missing,
-        )
-        assertTrue(
-            "Phase 3.1 must not grant INTERACT_ACROSS_USERS",
-            RequiredPermission.INTERACT_ACROSS_USERS in snapshot.missing,
-        )
+    fun observationNeverChangesWhatIsHeld() = runBlocking {
+        val reader = AndroidPermissionStateReader(context)
+        val before = reader.read()
+        Log.i(TAG, "permission snapshot: " + before)
+
+        // Exercise the observation surface of this class.
+        coordinator().evaluate()
+
+        val after = reader.read()
+        assertEquals("no permission may change by observing", before.missing, after.missing)
+        assertEquals("no app-op may change by observing", before.usageStatsAppOp, after.usageStatsAppOp)
     }
 
     /**
@@ -159,6 +164,15 @@ class CapabilityRuntimeTest {
      */
     @Test
     fun theAppUidBackendIsRefusedAndSaysWhy() = runBlocking {
+        // Only meaningful while the permissions are absent. After the Phase 4 grant flow has
+        // run they are legitimately held, and the app UID is legitimately no longer refused.
+        val snapshot = AndroidPermissionStateReader(context).read()
+        assumeTrue(
+            "this covers the ungranted state; the app currently holds " +
+                (RequiredPermission.entries - snapshot.missing.toSet()),
+            snapshot.missing.isNotEmpty(),
+        )
+
         val out = GrantedAppProcessRunner().run(ProbeCommand.BatteryStatsProto)
         Log.i(TAG, "app-uid proto probe: " + out + " head=" + out.stdoutHead(200).trim())
         assertEquals("the platform answers a denial with exit 0", 0, out.exitCode)
@@ -399,7 +413,25 @@ class CapabilityRuntimeTest {
     }
 
     /** Binds the remote service directly, to exercise the Binder contract itself. */
+    /**
+     * Binds a second, independent connection to the same remote service.
+     *
+     * Retried, boundedly, for the reason `ShizukuUserServiceRunner` documents: Shizuku
+     * delivers a previous service record's teardown to whatever connection is registered
+     * under that tag, so a bind attempted while an earlier test's service is still going
+     * away sees `onServiceDisconnected` before `onServiceConnected`. The production runner
+     * handles that; this ad-hoc helper has to as well, or the security assertion below
+     * fails for a reason that has nothing to do with security.
+     */
     private fun bindDirectly(): IProbeService? {
+        repeat(DIRECT_BIND_ATTEMPTS) { attempt ->
+            bindDirectlyOnce()?.let { return it }
+            if (attempt < DIRECT_BIND_ATTEMPTS - 1) Thread.sleep(DIRECT_BIND_RETRY_MS)
+        }
+        return null
+    }
+
+    private fun bindDirectlyOnce(): IProbeService? {
         val args = Shizuku.UserServiceArgs(
             ComponentName(context.packageName, ProbeService::class.java.name),
         )
@@ -424,6 +456,11 @@ class CapabilityRuntimeTest {
         Shizuku.bindUserService(args, conn)
         latch.await(BIND_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         directConnection = args to conn
+        if (bound == null) {
+            // Release the failed attempt before trying again, so records do not accumulate.
+            runCatching { Shizuku.unbindUserService(args, conn, true) }
+            directConnection = null
+        }
         return bound
     }
 
@@ -441,6 +478,10 @@ class CapabilityRuntimeTest {
         const val TAG = "BattInsightRuntime"
         const val ARG_SHIZUKU_INSTALLED = "shizukuInstalled"
         const val BIND_TIMEOUT_SECONDS = 20L
+
+        /** Bounded, matching the production runner's handling of the same race. */
+        const val DIRECT_BIND_ATTEMPTS = 3
+        const val DIRECT_BIND_RETRY_MS = 400L
 
         /** What Phase 3 actually probes. Growing this is Phase 4's job, not a test's. */
         val PROBED_CAPABILITIES = listOf(
