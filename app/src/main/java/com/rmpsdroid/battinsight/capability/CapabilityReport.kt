@@ -1,6 +1,7 @@
 package com.rmpsdroid.battinsight.capability
 
 import com.rmpsdroid.battinsight.collection.BackendKind
+import com.rmpsdroid.battinsight.collection.BackendSelection
 import com.rmpsdroid.battinsight.collection.BackendStatus
 import com.rmpsdroid.battinsight.permissions.PermissionSnapshot
 import com.rmpsdroid.battinsight.shizuku.ShizukuState
@@ -35,6 +36,13 @@ data class CapabilityReport(
     val permissions: PermissionSnapshot,
     val shizuku: ShizukuState,
     val findings: List<CapabilityFinding>,
+    /**
+     * Which backend was chosen, and why.
+     *
+     * Computed by the collection layer so every screen shows the same answer. A screen that
+     * worked this out for itself could disagree with what actually ran.
+     */
+    val selection: BackendSelection = BackendSelection.unknown,
     /** True while a refresh is running, so the UI can show progress without a second flag. */
     val refreshing: Boolean = false,
 ) {

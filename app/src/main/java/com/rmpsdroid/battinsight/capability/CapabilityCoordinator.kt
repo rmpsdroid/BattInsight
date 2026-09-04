@@ -3,6 +3,7 @@ package com.rmpsdroid.battinsight.capability
 import com.rmpsdroid.battinsight.collection.BackendAvailability
 import com.rmpsdroid.battinsight.collection.BackendIdentity
 import com.rmpsdroid.battinsight.collection.BackendKind
+import com.rmpsdroid.battinsight.collection.BackendSelection
 import com.rmpsdroid.battinsight.collection.BackendStatus
 import com.rmpsdroid.battinsight.collection.CollectionOutcome
 import com.rmpsdroid.battinsight.collection.ExecutionOutput
@@ -53,6 +54,15 @@ class CapabilityCoordinator(
     private val packageSource: PackageResolutionSource,
     private val scope: CoroutineScope,
     private val clock: () -> Long = System::currentTimeMillis,
+    /**
+     * Turns backend availability into the one backend that will actually be used.
+     *
+     * Injected because the answer depends on the user's access choice, which lives outside
+     * this class. The default reproduces the Phase 3 rule -- prefer Shizuku when usable --
+     * so a caller that has expressed no preference behaves as before.
+     */
+    private val backendSelector: (BackendAvailability, BackendAvailability) -> BackendSelection =
+        ::preferShizukuWhenUsable,
 ) {
     private val _report = MutableStateFlow(CapabilityReport.unknown())
     val report: StateFlow<CapabilityReport> = _report.asStateFlow()
@@ -95,10 +105,12 @@ class CapabilityCoordinator(
             ),
         )
 
-        // Prefer Shizuku when usable: measured faster and with better name resolution.
-        val active: Pair<BackendKind, ProcessRunner>? = when {
-            shizukuStatus is BackendAvailability.Ready -> BackendKind.SHIZUKU_ADB to shizukuRunner
-            grantedStatus is BackendAvailability.Ready -> BackendKind.GRANTED_APP to grantedAppRunner
+        // Which backend actually runs is decided by the injected selector, so the user's
+        // access choice is honoured rather than overridden by whatever happens to be ready.
+        val selection = backendSelector(shizukuStatus, grantedStatus)
+        val active: Pair<BackendKind, ProcessRunner>? = when (selection.active) {
+            BackendKind.SHIZUKU_ADB -> BackendKind.SHIZUKU_ADB to shizukuRunner
+            BackendKind.GRANTED_APP -> BackendKind.GRANTED_APP to grantedAppRunner
             else -> null
         }
 
@@ -121,6 +133,7 @@ class CapabilityCoordinator(
             permissions = permissions,
             shizuku = shizuku,
             findings = findings,
+            selection = selection,
             refreshing = false,
         )
     }
@@ -405,4 +418,30 @@ class CapabilityCoordinator(
         const val CHECKIN_TIMEOUT_MS = 30_000L
         /** Bounded scan: enough to find kwl records without materialising ~800 KB. */
     }
+}
+
+/**
+ * The Phase 3 rule, kept as the default so behaviour without a stated preference is
+ * unchanged: Shizuku first when usable, because it was measured faster, resolved names the
+ * application UID could not, and needs none of BattInsight's privileged permissions.
+ */
+private fun preferShizukuWhenUsable(
+    shizuku: BackendAvailability,
+    grantedApp: BackendAvailability,
+): BackendSelection = when {
+    shizuku is BackendAvailability.Ready -> BackendSelection(
+        preferred = null,
+        active = BackendKind.SHIZUKU_ADB,
+        reason = "Shizuku is available and is preferred when no choice has been made",
+    )
+    grantedApp is BackendAvailability.Ready -> BackendSelection(
+        preferred = null,
+        active = BackendKind.GRANTED_APP,
+        reason = "Using BattInsight's own granted access",
+    )
+    else -> BackendSelection(
+        preferred = null,
+        active = null,
+        reason = "No usable backend",
+    )
 }
