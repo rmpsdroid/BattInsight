@@ -90,7 +90,7 @@ first thing to check. Verify a bump with a genuine recompile: Gradle will report
 ## Running the tests
 
 ```bash
-./gradlew testDebugUnitTest          # 177 unit tests; 10 fixture cases skip without an archive
+./gradlew testDebugUnitTest          # 258 unit tests; 10 fixture cases skip without an archive
 ./gradlew lintDebug                  # a build gate; abortOnError is enabled
 ```
 
@@ -124,6 +124,24 @@ truth; without it that case reports as skipped.
 
 Install with `adb install -r`. **Never `-g`** — it grants every requested permission, which
 silently defeats the denial paths most of these tests exist to check.
+
+### Session engine tests
+
+The engine is pure Kotlin, so its scenarios need no device and no emulator:
+
+```bash
+./gradlew testDebugUnitTest --tests "*Session*"
+```
+
+Identifiers and clocks are injected (`SequentialIds`, explicit `elapsedMillis`), so a
+failure is reproducible rather than a story about a build that once went red. The invariant
+tests drive seeded random sequences of plausible device behaviour — plug changes, repeats,
+reboots, stale events, wall-clock jumps — and the seed is printed in every failure message.
+
+The instrumented `BatterySourceRuntimeTest` measures only what a real platform decides:
+whether `/proc/sys/kernel/random/boot_id` is readable, what the sticky battery intent
+contains, and that receiver registration is symmetric. It changes nothing, and in particular
+never simulates a charge transition.
 
 ## Not yet decided
 

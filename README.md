@@ -12,11 +12,12 @@ testable analysis of battery and power behaviour.
 >
 > There is no release, and **no battery diagnostic feature works yet**.
 >
-> What exists today is the capability architecture and the access setup that feeds it: the
-> application can determine which access backends are usable, guide you through granting
-> access by whichever of three routes you prefer, and verify that battery statistics can
-> actually be acquired — and it shows all of that in a Capability Centre screen. It does
-> not yet collect, parse, store or display any battery data.
+> What exists today is the capability architecture, the access setup that feeds it, and the
+> session engine that decides what an observation means over time. The application can
+> determine which access backends are usable, guide you through granting access by whichever
+> of three routes you prefer, verify that battery statistics can actually be acquired, and
+> track charge and discharge intervals correctly across reboots, process death and clock
+> changes. It does not yet decode, store or display any battery statistics.
 >
 > **BattInsight is not currently a replacement for any existing battery statistics
 > application.**
@@ -58,15 +59,21 @@ that silently shows an empty screen when it lacks access is worse than one that 
   granted without an explicit confirmation naming exactly what will change
 - **Access removal** — the three permissions can be removed again from inside the app when
   Shizuku is available, or with the exact ADB commands when it is not
+- **Battery session engine** — charge and discharge intervals with stable identity,
+  measured on the monotonic clock so a clock or timezone change cannot alter a duration,
+  with reboots, process death and missed transitions each handled distinctly and honestly
+- **Snapshot comparability** — two readings are only compared when it is valid to do so, and
+  a refusal always explains itself rather than showing a blank
 - A capability model that distinguishes *available*, *available but idle*, *available but
   incomplete*, *permission missing*, *not supported by this device*, *source unavailable*,
   *execution failed* and *unknown* — because collapsing those is what produces
   uninformative empty screens
-- 177 unit tests and 26 instrumented tests, written against platform output captured
+- 258 unit tests and 35 instrumented tests, written against platform output captured
   from real measurement and validated on an Android 16 emulator
 
 **No battery diagnostics are implemented.** The application can tell you whether it *could*
-collect data; it does not yet collect, parse, store or display any.
+collect data, and it tracks which charge or discharge interval you are currently in; it does
+not yet decode, store or display any battery statistics.
 
 ### Planned
 
@@ -78,7 +85,7 @@ None of the following exists yet.
 | Wakelocks | Partial (per-application) wakelock attribution |
 | Kernel wakelocks | Kernel wakelock attribution |
 | Alarms | Alarm and scheduled-job attribution |
-| Sessions | Charge/discharge session tracking that survives reboots and process death |
+| Sessions | Durable storage so sessions survive the app closing (the engine exists; persistence does not) |
 | Diagnostics | A redacted diagnostic bundle for troubleshooting |
 | Reports and export | Structured, machine-readable export |
 
@@ -126,6 +133,10 @@ with it denied, even though comparable applications ask for it.
   battery statistics have actually been read, never because three permissions look granted.
 - **Empty is not failure.** A source with nothing to report and a source that is absent are
   different states and must stay distinguishable.
+- **Monotonic time for durations, wall clock for display.** Changing the clock or crossing a
+  timezone must never alter a measured interval.
+- **Inferred is not observed.** A transition reconstructed at start-up is labelled as such,
+  because the application did not see it happen.
 - **Session correctness over cosmetics.** Historical data is never silently discarded.
 
 ---
