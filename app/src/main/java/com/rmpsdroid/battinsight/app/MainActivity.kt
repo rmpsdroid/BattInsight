@@ -30,6 +30,9 @@ import com.rmpsdroid.battinsight.platform.AndroidPackageResolutionSource
 import com.rmpsdroid.battinsight.platform.AndroidPermissionStateReader
 import com.rmpsdroid.battinsight.platform.AndroidShizukuGateway
 import com.rmpsdroid.battinsight.platform.AndroidUsageAccessSource
+import com.rmpsdroid.battinsight.persistence.BattInsightDatabase
+import com.rmpsdroid.battinsight.persistence.RoomSessionStateStore
+import com.rmpsdroid.battinsight.persistence.StorageCounts
 import com.rmpsdroid.battinsight.platform.GrantedAppProcessRunner
 import com.rmpsdroid.battinsight.setup.AccessSetupCoordinator
 import com.rmpsdroid.battinsight.setup.GrantStep
@@ -110,7 +113,18 @@ class BattInsightViewModel(context: Context) : ViewModel() {
      */
     private val batterySource = AndroidBatterySource(appContext, AndroidBootIdentitySource())
 
-    private val sessions = SessionCoordinator(scope = viewModelScope)
+    /**
+     * Durable session storage.
+     *
+     * Owned here, one instance for the application. The UI never touches a DAO: it observes
+     * the coordinator, which owns the store, which owns the database.
+     */
+    private val sessionStore = RoomSessionStateStore(BattInsightDatabase.get(appContext).sessionDao())
+
+    private val sessions = SessionCoordinator(store = sessionStore, scope = viewModelScope)
+
+    private val _storageCounts = MutableStateFlow<StorageCounts?>(null)
+    val storageCounts: StateFlow<StorageCounts?> = _storageCounts.asStateFlow()
 
     val report: StateFlow<CapabilityReport> = capability.report
     val setupState: StateFlow<SetupState> = setup.state
@@ -148,7 +162,11 @@ class BattInsightViewModel(context: Context) : ViewModel() {
         // for what changed while the process did not exist.
         viewModelScope.launch {
             batterySource.readCurrent(SessionTrigger.APP_START)?.let { sessions.begin(it) }
-            batterySource.observations().collect { sessions.observe(it) }
+            _storageCounts.value = sessionStore.counts()
+            batterySource.observations().collect {
+                sessions.observe(it)
+                _storageCounts.value = sessionStore.counts()
+            }
         }
     }
 
@@ -242,6 +260,7 @@ private fun BattInsightApp() {
         val revoking by vm.revoking.collectAsStateWithLifecycle()
         val lastRevoke by vm.lastRevoke.collectAsStateWithLifecycle()
         val sessionStatus by vm.sessionStatus.collectAsStateWithLifecycle()
+        val storageCounts by vm.storageCounts.collectAsStateWithLifecycle()
 
         // Leaving a secondary screen goes back to the main one rather than out of the app.
         BackHandler(enabled = screen != Screen.CapabilityCentre && mode.isChosen) {
@@ -273,6 +292,7 @@ private fun BattInsightApp() {
                 report = report,
                 mode = mode,
                 sessionStatus = sessionStatus,
+                storageCounts = storageCounts,
                 onRefresh = vm::refreshCapabilities,
                 onManageAccess = vm::openManageAccess,
             )

@@ -1,0 +1,365 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 1,
+    "identityHash": "c9e617342d32d7325838db917397c71e",
+    "entities": [
+      {
+        "tableName": "battery_snapshots",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`snapshot_id` TEXT NOT NULL, `session_id` TEXT NOT NULL, `boot_kind` TEXT NOT NULL, `boot_kernel_id` TEXT, `boot_derived_millis` INTEGER, `elapsed_realtime_millis` INTEGER NOT NULL, `wall_clock_millis` INTEGER NOT NULL, `utc_offset_minutes` INTEGER NOT NULL, `trigger` TEXT NOT NULL, `observation_trigger` TEXT NOT NULL, `battery_status` TEXT NOT NULL, `plug_source` TEXT NOT NULL, `battery_health` TEXT NOT NULL, `level` INTEGER, `scale` INTEGER, `present` INTEGER, `temperature_deci_celsius` INTEGER, `voltage_milli_volts` INTEGER, `charge_counter_micro_amp_hours` INTEGER, `counter_generation` INTEGER NOT NULL, `snapshot_schema_version` INTEGER NOT NULL, `counter_source` TEXT NOT NULL, `platform_version_at_capture` TEXT, `app_version_at_capture` TEXT, PRIMARY KEY(`snapshot_id`))",
+        "fields": [
+          {
+            "fieldPath": "snapshotId",
+            "columnName": "snapshot_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sessionId",
+            "columnName": "session_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "bootKind",
+            "columnName": "boot_kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "bootKernelId",
+            "columnName": "boot_kernel_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "bootDerivedMillis",
+            "columnName": "boot_derived_millis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "elapsedRealtimeMillis",
+            "columnName": "elapsed_realtime_millis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "wallClockMillis",
+            "columnName": "wall_clock_millis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "utcOffsetMinutes",
+            "columnName": "utc_offset_minutes",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "trigger",
+            "columnName": "trigger",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "observationTrigger",
+            "columnName": "observation_trigger",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "batteryStatus",
+            "columnName": "battery_status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "plugSource",
+            "columnName": "plug_source",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "batteryHealth",
+            "columnName": "battery_health",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "level",
+            "columnName": "level",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "scale",
+            "columnName": "scale",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "present",
+            "columnName": "present",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "temperatureDeciCelsius",
+            "columnName": "temperature_deci_celsius",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "voltageMilliVolts",
+            "columnName": "voltage_milli_volts",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "chargeCounterMicroAmpHours",
+            "columnName": "charge_counter_micro_amp_hours",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "counterGeneration",
+            "columnName": "counter_generation",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "snapshotSchemaVersion",
+            "columnName": "snapshot_schema_version",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "counterSource",
+            "columnName": "counter_source",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "platformVersionAtCapture",
+            "columnName": "platform_version_at_capture",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "appVersionAtCapture",
+            "columnName": "app_version_at_capture",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "snapshot_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_battery_snapshots_session_id",
+            "unique": false,
+            "columnNames": [
+              "session_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_battery_snapshots_session_id` ON `${TABLE_NAME}` (`session_id`)"
+          }
+        ]
+      },
+      {
+        "tableName": "battery_sessions",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`session_id` TEXT NOT NULL, `session_type` TEXT NOT NULL, `start_snapshot_id` TEXT NOT NULL, `latest_snapshot_id` TEXT NOT NULL, `end_snapshot_id` TEXT, `end_reason` TEXT NOT NULL, `counter_generation` INTEGER NOT NULL, PRIMARY KEY(`session_id`), FOREIGN KEY(`start_snapshot_id`) REFERENCES `battery_snapshots`(`snapshot_id`) ON UPDATE NO ACTION ON DELETE NO ACTION , FOREIGN KEY(`latest_snapshot_id`) REFERENCES `battery_snapshots`(`snapshot_id`) ON UPDATE NO ACTION ON DELETE NO ACTION , FOREIGN KEY(`end_snapshot_id`) REFERENCES `battery_snapshots`(`snapshot_id`) ON UPDATE NO ACTION ON DELETE NO ACTION )",
+        "fields": [
+          {
+            "fieldPath": "sessionId",
+            "columnName": "session_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sessionType",
+            "columnName": "session_type",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startSnapshotId",
+            "columnName": "start_snapshot_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "latestSnapshotId",
+            "columnName": "latest_snapshot_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "endSnapshotId",
+            "columnName": "end_snapshot_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "endReason",
+            "columnName": "end_reason",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "counterGeneration",
+            "columnName": "counter_generation",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "session_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_battery_sessions_start_snapshot_id",
+            "unique": false,
+            "columnNames": [
+              "start_snapshot_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_battery_sessions_start_snapshot_id` ON `${TABLE_NAME}` (`start_snapshot_id`)"
+          },
+          {
+            "name": "index_battery_sessions_latest_snapshot_id",
+            "unique": false,
+            "columnNames": [
+              "latest_snapshot_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_battery_sessions_latest_snapshot_id` ON `${TABLE_NAME}` (`latest_snapshot_id`)"
+          },
+          {
+            "name": "index_battery_sessions_end_snapshot_id",
+            "unique": false,
+            "columnNames": [
+              "end_snapshot_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_battery_sessions_end_snapshot_id` ON `${TABLE_NAME}` (`end_snapshot_id`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "battery_snapshots",
+            "onDelete": "NO ACTION",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "start_snapshot_id"
+            ],
+            "referencedColumns": [
+              "snapshot_id"
+            ]
+          },
+          {
+            "table": "battery_snapshots",
+            "onDelete": "NO ACTION",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "latest_snapshot_id"
+            ],
+            "referencedColumns": [
+              "snapshot_id"
+            ]
+          },
+          {
+            "table": "battery_snapshots",
+            "onDelete": "NO ACTION",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "end_snapshot_id"
+            ],
+            "referencedColumns": [
+              "snapshot_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "engine_state",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `session_id` TEXT, `last_accepted_snapshot_id` TEXT, `counter_generation` INTEGER NOT NULL, PRIMARY KEY(`id`), FOREIGN KEY(`session_id`) REFERENCES `battery_sessions`(`session_id`) ON UPDATE NO ACTION ON DELETE NO ACTION , FOREIGN KEY(`last_accepted_snapshot_id`) REFERENCES `battery_snapshots`(`snapshot_id`) ON UPDATE NO ACTION ON DELETE NO ACTION )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sessionId",
+            "columnName": "session_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastAcceptedSnapshotId",
+            "columnName": "last_accepted_snapshot_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "counterGeneration",
+            "columnName": "counter_generation",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_engine_state_session_id",
+            "unique": false,
+            "columnNames": [
+              "session_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_engine_state_session_id` ON `${TABLE_NAME}` (`session_id`)"
+          },
+          {
+            "name": "index_engine_state_last_accepted_snapshot_id",
+            "unique": false,
+            "columnNames": [
+              "last_accepted_snapshot_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_engine_state_last_accepted_snapshot_id` ON `${TABLE_NAME}` (`last_accepted_snapshot_id`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "battery_sessions",
+            "onDelete": "NO ACTION",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "session_id"
+            ],
+            "referencedColumns": [
+              "session_id"
+            ]
+          },
+          {
+            "table": "battery_snapshots",
+            "onDelete": "NO ACTION",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "last_accepted_snapshot_id"
+            ],
+            "referencedColumns": [
+              "snapshot_id"
+            ]
+          }
+        ]
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'c9e617342d32d7325838db917397c71e')"
+    ]
+  }
+}

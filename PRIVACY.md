@@ -24,26 +24,45 @@ BattInsight is **pre-release**. As of the current source:
 | **Remote data collection** | None. No data is transmitted anywhere |
 | **Accounts / sign-in** | None |
 | **Cloud backup** | Disabled. `allowBackup="false"`, and backup rules exclude every data domain |
-| **Stored on device** | One string: which access method you chose. Nothing diagnostic is persisted |
+| **Stored on device** | Your access-method choice, and your own battery sessions. See below |
 
 An application that cannot reach the network is the strongest privacy statement available
 to a tool that reads usage history, and that is the current design.
 
 ## Data storage
 
-The only thing BattInsight stores today is **your access-method choice** — a single string
-in the application's private storage. No battery statistics, no package lists, no
-permission messages and no capability reports are written to disk.
+BattInsight stores two things in its own private storage, and nothing else:
 
-That is deliberate. Those readings describe the device *at a moment* and go stale as soon as
-anything changes; keeping them would create a second, quieter source of truth able to
-disagree with reality. Readiness is therefore always re-checked, never remembered — which is
-also why there is no "setup complete" flag that could keep claiming access you no longer
-have.
+1. **Your access-method choice** — a single string.
+2. **Your battery sessions** — the charge and discharge intervals it has observed, and the
+   battery readings that mark their boundaries: level, temperature, voltage, charge counter,
+   plug source and health, each with the time it was taken.
 
-Any data the application collects in future will be stored **on the device only**, in the
-application's own private storage, and will leave the device only in a file the user
-explicitly chooses to create and share.
+The second is new. Sessions used to be forgotten when the application closed, which made the
+interval you were shown true but disposable. They are now kept so that history can eventually
+be charted — which is the point of a battery diagnostics tool.
+
+What is stored is BattInsight's own reading of the *public* battery broadcast every
+application on Android can see. It is not per-application usage, and it names no packages.
+
+**Capability and permission state is still never stored.** Those readings describe the device
+*at a moment* and go stale as soon as anything changes; keeping them would create a second,
+quieter source of truth able to disagree with reality. Readiness is therefore always
+re-checked, never remembered — which is also why there is no "setup complete" flag that could
+keep claiming access you no longer have.
+
+Two identifiers are stored alongside each reading, and both are worth naming plainly. The
+first is a UUID BattInsight generates for each session, which means nothing outside this
+application. The second is the kernel boot identifier, a value that changes on every restart;
+it is what lets BattInsight tell a reboot from a clock change, and it never leaves the device.
+
+Nothing is deleted on your behalf. If a future version cannot read what an earlier one wrote,
+it says so and leaves the data alone — it does not start fresh by wiping it. See
+[docs/persistence.md](docs/persistence.md).
+
+Everything the application stores, now and in future, stays **on the device only**, in the
+application's own private storage, and leaves the device only in a file you explicitly choose
+to create and share.
 
 Cloud backup is disabled deliberately. Beyond privacy, restoring another device's battery
 snapshots would corrupt session identity, because boot identifiers and counters would not

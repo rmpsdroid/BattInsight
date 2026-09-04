@@ -17,6 +17,20 @@ data class SessionStatus(
     val bootIdentity: BootIdentity,
     /** What the most recent observation did. Null before anything arrives. */
     val lastResult: TransitionResult? = null,
+    /**
+     * How the last durable write went.
+     *
+     * Present so the UI can tell "this is what BattInsight believes and has stored" from
+     * "this is what it believes and could not store". Null before anything has been written.
+     */
+    val persistence: PersistenceResult? = null,
+    /**
+     * What was loaded at start-up, when that failed.
+     *
+     * Null when loading succeeded or found nothing. An unreadable store is not the same as
+     * an empty one, and the difference is visible rather than smoothed away.
+     */
+    val loadFailure: StoredState.Failed? = null,
 ) {
     val isActive: Boolean get() = session?.isActive == true
 
@@ -64,9 +78,16 @@ class SessionCoordinator(
      * transitions it did not witness comes from here.
      */
     suspend fun begin(observation: BatteryObservation): TransitionResult = mutex.withLock {
-        val saved = store.load()
+        val stored = store.load()
+
+        // An unreadable store is not an empty one. Reconciling from null would start a fresh
+        // interval and quietly discard whatever was there; instead the failure is carried
+        // through to the UI, and reconciliation proceeds from nothing *knowingly*.
+        val loadFailure = stored as? StoredState.Failed
+        val saved = (stored as? StoredState.Loaded)?.state
+
         val transition = engine.reconcile(saved, observation)
-        commit(transition, observation)
+        commit(transition, observation, loadFailure)
         transition.result
     }
 
@@ -88,31 +109,64 @@ class SessionCoordinator(
      * Does not end the session -- see [SessionEngine.noteCounterReset]. Nothing calls this
      * in production yet; the detector needs the decoder.
      */
-    suspend fun noteCounterReset(change: CounterGenerationChange) = mutex.withLock {
-        state = engine.noteCounterReset(state, change)
-        store.save(state)
-        publish(_status.value.lastObservation, _status.value.lastResult)
-    }
+    suspend fun noteCounterReset(change: CounterGenerationChange): PersistenceResult =
+        mutex.withLock {
+            val next = engine.noteCounterReset(state, change)
+            val result = store.saveState(next)
+            if (result.succeeded) {
+                state = next
+            }
+            publish(_status.value.lastObservation, _status.value.lastResult, result)
+            result
+        }
 
-    private suspend fun commit(transition: SessionTransition, observation: BatteryObservation) {
+    /**
+     * Applies a transition, but only if it can be stored.
+     *
+     * The order is the point. Persist first, adopt second, publish third -- so the in-memory
+     * state and the database cannot diverge, and the UI never shows a session that was not
+     * written. A failed write leaves the previous state in force and reports the failure;
+     * the alternative, carrying on in memory, would produce an application confidently
+     * describing history it will not have after the next process death.
+     */
+    private suspend fun commit(
+        transition: SessionTransition,
+        observation: BatteryObservation,
+        loadFailure: StoredState.Failed? = null,
+    ) {
         // A rejected observation leaves state untouched, and must not be saved or published
         // as though it had been accepted.
         if (transition.result is TransitionResult.Rejected) {
-            publish(_status.value.lastObservation, transition.result)
+            publish(_status.value.lastObservation, transition.result, _status.value.persistence, loadFailure)
             return
         }
+
+        val result = store.persist(transition)
+        if (!result.succeeded) {
+            // Nothing is adopted. The previous state remains authoritative, and the failure
+            // is visible rather than swallowed.
+            publish(_status.value.lastObservation, _status.value.lastResult, result, loadFailure)
+            return
+        }
+
         state = transition.state
-        store.save(state)
-        publish(observation, transition.result)
+        publish(observation, transition.result, result, loadFailure)
     }
 
-    private fun publish(observation: BatteryObservation?, result: TransitionResult?) {
+    private fun publish(
+        observation: BatteryObservation?,
+        result: TransitionResult?,
+        persistence: PersistenceResult? = _status.value.persistence,
+        loadFailure: StoredState.Failed? = _status.value.loadFailure,
+    ) {
         _status.value = SessionStatus(
             session = state.session,
             lastObservation = observation,
             counterGeneration = state.counterGeneration,
             bootIdentity = state.lastAccepted?.bootIdentity ?: BootIdentity.Unknown,
             lastResult = result,
+            persistence = persistence,
+            loadFailure = loadFailure,
         )
     }
 }

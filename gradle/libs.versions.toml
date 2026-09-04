@@ -14,6 +14,19 @@ androidxTestRunner = "1.7.0"
 androidxTestExtJunit = "1.3.0"
 # DataStore holds the access-mode preference and nothing else. 1.2.1 is current stable.
 datastore = "1.2.1"
+# Room stores the battery session domain. 3.0.2 is current stable, and lives under the
+# androidx.room3 coordinates -- Room 3 is a separate artifact family, not an upgrade in place.
+room = "3.0.2"
+# Room 3 has no built-in driver: it requires an explicit androidx.sqlite SQLiteDriver.
+sqlite = "2.7.0"
+# KSP 2.3.x is versioned independently of Kotlin -- the old "<kotlin>-<ksp>" scheme is gone --
+# and is what current AGP 9 guidance requires. 2.3.6 is the documented floor for AGP 9.
+ksp = "2.3.11"
+# Robolectric runs the Room tests on the JVM, so CI exercises the real database.
+robolectric = "4.16.1"
+# Not a dependency we choose to use -- see the constraint in app/build.gradle.kts.
+# DataStore 1.2.1 brings 1.7.3; Room 3.0.2's schema bundles need 1.8.x serializers.
+kotlinxSerialization = "1.8.1"
 # Shizuku: official project (github.com/RikkaApps/Shizuku). 13.1.5 is current stable.
 shizuku = "13.1.5"
 # Compose BOM pins every Compose artifact to one tested set.
@@ -21,7 +34,15 @@ composeBom = "2026.08.00"
 activityCompose = "1.13.0"
 lifecycleCompose = "2.11.0"
 coroutinesTest = "1.11.0"
-composeCompiler = "2.4.10"
+# MUST equal the Kotlin version AGP's built-in Kotlin uses -- AGP 9.4.0 bundles KGP 2.2.10.
+# The Compose compiler ships inside the Kotlin repository and is released in lockstep with it,
+# so "compatible" here means "the same version", not "new enough".
+#
+# This was 2.4.10, two Kotlin minor lines ahead of the compiler it actually ran against, and
+# it broke the release variant: the 2.3+ plugin asks for
+# org.jetbrains.kotlin:compose-group-mapping:<kotlinVersion>, which for 2.2.10 was never
+# published (the artifact first appears at 2.3.0-Beta1). assembleRelease could not resolve it.
+composeCompiler = "2.2.10"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -34,6 +55,17 @@ junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-test-runner = { group = "androidx.test", name = "runner", version.ref = "androidxTestRunner" }
 androidx-test-ext-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxTestExtJunit" }
 androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }
+# Room 3 lives under androidx.room3 with its own artifact prefix, and has no -ktx:
+# coroutines are in the runtime because Room 3 is Kotlin-first rather than Kotlin-optional.
+androidx-room3-runtime = { group = "androidx.room3", name = "room3-runtime", version.ref = "room" }
+androidx-room3-compiler = { group = "androidx.room3", name = "room3-compiler", version.ref = "room" }
+androidx-room3-testing = { group = "androidx.room3", name = "room3-testing", version.ref = "room" }
+# Room 3 requires an explicit SQLiteDriver. The framework driver wraps the platform's own
+# SQLite, which is what every measurement in this project was taken against.
+androidx-sqlite-framework = { group = "androidx.sqlite", name = "sqlite-framework", version.ref = "sqlite" }
+kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
+kotlinx-serialization-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-core", version.ref = "kotlinxSerialization" }
+robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
 
 # Shizuku -- official API and provider. No root APIs, no Sui.
 shizuku-api = { group = "dev.rikka.shizuku", name = "api", version.ref = "shizuku" }
@@ -53,3 +85,5 @@ androidx-lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "l
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "composeCompiler" }
+ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
+room = { id = "androidx.room3", version.ref = "room" }

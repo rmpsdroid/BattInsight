@@ -3,6 +3,11 @@ plugins {
     // must NOT be applied -- AGP rejects it outright. See docs/development.md.
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+    // Room 3 generates Kotlin and supports KSP only -- KAPT is not an option.
+    alias(libs.plugins.ksp)
+    // The androidx.room3 Gradle plugin owns the schema directory, so exported schemas land
+    // in a source-controlled location rather than a build output.
+    alias(libs.plugins.room)
 }
 
 android {
@@ -72,6 +77,8 @@ android {
 
     testOptions {
         unitTests.isReturnDefaultValues = true
+        // Robolectric needs the Android resources and manifest of the app under test.
+        unitTests.isIncludeAndroidResources = true
         // Real device captures are deliberately not in this repository -- they are ~15 MB
         // of the maintainer's own device state. RealFixtureValidationTest runs against them
         // when an archive is pointed at with -Dbattinsight.fixtures=..., and is skipped
@@ -85,9 +92,35 @@ android {
 }
 
 dependencies {
+    /**
+     * Raises kotlinx-serialization to a version Room can actually run against.
+     *
+     * Constraints, not dependencies: nothing here asks for kotlinx-serialization, and this
+     * adds nothing to the APK that was not already in it. It only sets the version when
+     * something else drags it in, which DataStore 1.2.1 does at 1.7.3.
+     *
+     * Re-measured for Room 3.0.2 rather than carried over from Room 2. Still required:
+     * room3-migration-jvm:3.0.2 declares kotlinx-serialization-json-jvm 1.8.1, and with the
+     * constraint removed the androidTest classpath resolves 1.7.3 instead, because AGP's
+     * consistent resolution pins it to whatever the application runtime resolved. Room reads
+     * its exported schemas through serializers generated against 1.8.x, which fail on 1.7.3
+     * with `AbstractMethodError: typeParametersSerializers()`.
+     *
+     * That is also why the fix belongs on the *application* classpath when only the migration
+     * tests need it. Remove once DataStore ships 1.8.x and the versions agree on their own.
+     */
+    constraints {
+        implementation(libs.kotlinx.serialization.json)
+        implementation(libs.kotlinx.serialization.core)
+    }
+
     implementation(libs.androidx.core.ktx)
     // Stores the access-mode preference. Nothing diagnostic is ever persisted.
     implementation(libs.androidx.datastore.preferences)
+    // Room: the battery session domain, stored as explicit typed columns.
+    implementation(libs.androidx.room3.runtime)
+    implementation(libs.androidx.sqlite.framework)
+    ksp(libs.androidx.room3.compiler)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.material3)
@@ -106,11 +139,28 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+    // Robolectric lets the Room tests run on the JVM, so CI -- which has no emulator --
+    // exercises the real database, real SQLite and the real schema rather than a fake.
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.ext.junit)
+    testImplementation(libs.androidx.room3.testing)
 
     androidTestImplementation(libs.junit)
     androidTestImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.room3.testing)
+}
+
+/**
+ * Exported Room schemas are migration evidence and belong in source control.
+ *
+ * Committed rather than generated into a build directory: a schema that only exists as build
+ * output cannot be diffed in review, and a migration written against a schema nobody can see
+ * is a migration nobody can check.
+ */
+room3 {
+    schemaDirectory("$projectDir/schemas")
 }
 
 /** Points RealFixtureValidationTest at an out-of-tree archive of real device captures. */

@@ -17,7 +17,8 @@ testable analysis of battery and power behaviour.
 > determine which access backends are usable, guide you through granting access by whichever
 > of three routes you prefer, verify that battery statistics can actually be acquired, and
 > track charge and discharge intervals correctly across reboots, process death and clock
-> changes. It does not yet decode, store or display any battery statistics.
+> changes, storing them so they survive the app closing. It does not yet decode or display
+> any battery statistics.
 >
 > **BattInsight is not currently a replacement for any existing battery statistics
 > application.**
@@ -72,8 +73,8 @@ that silently shows an empty screen when it lacks access is worse than one that 
   from real measurement and validated on an Android 16 emulator
 
 **No battery diagnostics are implemented.** The application can tell you whether it *could*
-collect data, and it tracks which charge or discharge interval you are currently in; it does
-not yet decode, store or display any battery statistics.
+collect data, and it tracks and stores which charge or discharge interval you are in; it does
+not yet decode or display any battery statistics.
 
 ### Planned
 
@@ -85,7 +86,7 @@ None of the following exists yet.
 | Wakelocks | Partial (per-application) wakelock attribution |
 | Kernel wakelocks | Kernel wakelock attribution |
 | Alarms | Alarm and scheduled-job attribution |
-| Sessions | Durable storage so sessions survive the app closing (the engine exists; persistence does not) |
+| Sessions | A history screen over the stored sessions (the engine and its storage exist; nothing charts them) |
 | Diagnostics | A redacted diagnostic bundle for troubleshooting |
 | Reports and export | Structured, machine-readable export |
 
@@ -186,6 +187,7 @@ Emulator results are not treated as evidence about physical devices.
 | [docs/capabilities.md](docs/capabilities.md) | The capability state model |
 | [docs/data-sources.md](docs/data-sources.md) | Acquisition formats and prohibited commands |
 | [docs/session-model.md](docs/session-model.md) | Charge/discharge session ownership (design) |
+| [docs/persistence.md](docs/persistence.md) | What is stored, how it survives, and what is deliberately not stored |
 | [docs/security-privacy.md](docs/security-privacy.md) | Security and privacy posture in detail |
 | [docs/provenance.md](docs/provenance.md) | Relationship to prior work |
 | [docs/development.md](docs/development.md) | Build chain notes and conventions |
