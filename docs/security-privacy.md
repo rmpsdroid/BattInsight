@@ -8,7 +8,7 @@ the device** except in a file the user explicitly creates.
 
 ## Not declared
 
-The Phase 2A manifest declares **no permissions at all**.
+The manifest declares exactly three permissions, all for the optional granted-app backend.
 
 | Permission | Status |
 |---|---|
@@ -16,7 +16,7 @@ The Phase 2A manifest declares **no permissions at all**.
 | `QUERY_ALL_PACKAGES` | **Not declared.** Play-policy sensitive. See the UID-resolution investigation in `data-sources.md`; it must not be added as a shortcut |
 | `BATTERY_STATS` | **Not declared.** Measured unnecessary, despite both predecessors requesting it |
 | `READ_LOGS`, location, storage | **Not declared.** No feature requires them |
-| `DUMP`, `PACKAGE_USAGE_STATS`, `INTERACT_ACROSS_USERS` | **Not declared yet.** Required by the granted-app backend and added in Phase 3/4 alongside it. Declaring a privileged permission before the feature exists is how manifests accumulate permissions nobody can justify |
+| `DUMP`, `PACKAGE_USAGE_STATS`, `INTERACT_ACROSS_USERS` | **Declared**, for the optional granted-app backend. None is a runtime-dialog permission and declaring them does not make them available: they arrive only through ADB or a Shizuku shell session. The Shizuku backend needs none of them |
 
 No telemetry, analytics, crash reporting or advertising dependency exists, and none will be
 added without an explicit decision.
@@ -58,3 +58,28 @@ commit.
 The archived predecessor committed encrypted release keystores to its repository. **No
 inherited signing key will ever be used.** When release signing is established it will use a
 key generated for this project, stored outside the repository and injected via CI secrets.
+
+---
+
+## Capability probing and data handling
+
+The capability layer runs read-only commands and inspects the results. What it does with
+the output matters, because battery statistics contain application and usage information.
+
+- **Nothing is written to disk.** Probe output is inspected in memory and discarded. No
+  batterystats payload is persisted.
+- **Payloads are never logged.** `ExecutionOutput.toString()` reports byte counts and
+  timings only, and a test asserts payload bytes cannot appear in it.
+- **Captured output is bounded** — a hard ceiling on bytes read from a process, and a
+  bounded decoded prefix for classification. A checkin payload is around 800 KB and there
+  is no reason to hold or decode more than is inspected.
+- **Counts, not content.** The usage probe returns a row count, never usage records. The
+  package probe returns how many UIDs resolved, never the installed package list.
+- **No installed package list, usage history, full batterystats or kernel wakelock names
+  are logged.**
+
+## Nothing is changed
+
+The capability layer observes only. It executes no `pm grant`, changes no app-op, alters no
+setting, and requests no Shizuku authorisation. Setup actions are a later phase, and the
+Capability Centre deliberately offers no Grant or Install buttons.

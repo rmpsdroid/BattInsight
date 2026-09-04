@@ -1,24 +1,43 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!--
-      PHASE 2A FOUNDATION MANIFEST.
+      Permissions for the optional granted-app backend.
 
-      NO permissions are declared. This is deliberate.
+      These three are the measured minimum set. Granting them one at a time on Android 16
+      showed the platform demanding them in sequence: with none it refuses for lack of
+      DUMP; with DUMP it refuses for lack of PACKAGE_USAGE_STATS; with both it refuses
+      because dumpsys batterystats passes MATCH_ANY_USER internally and so needs
+      INTERACT_ACROSS_USERS. With all three, acquisition works.
 
-      The granted-app backend will eventually need DUMP, PACKAGE_USAGE_STATS and
-      INTERACT_ACROSS_USERS (the measured minimum set, see RequiredPermission.kt), but no
-      code uses them yet, and declaring a privileged permission before the feature exists
-      is how manifests accumulate permissions nobody can justify. They are added in
-      Phase 3/4 alongside the backend that needs them.
+      Important properties of these permissions:
+        * They are NOT runtime-dialog permissions. No in-app prompt can grant them.
+        * Declaring them does NOT make them available. They arrive only through ADB or a
+          Shizuku shell session, which is Phase 4 onboarding work.
+        * They are entirely optional. The Shizuku backend needs none of them, and the
+          application must remain honest about what it can do without them.
+        * Holding one is never assumed to mean a capability works. Every capability is
+          verified behaviourally before being reported as available.
 
-      Explicitly NOT declared, and not to be added without a separate decision:
-        INTERNET            : the application is local first and needs no network
-        QUERY_ALL_PACKAGES  : Play policy sensitive; belongs to the UID name resolution
-                              investigation recorded in docs/data-sources.md
-        BATTERY_STATS       : measured NOT required in Phase 1B
-        READ_LOGS, location, storage : no feature requires them
+      Deliberately NOT declared:
+        BATTERY_STATS       : measured unnecessary. Acquisition succeeded with it denied,
+                              and granting it changed nothing. Both predecessor apps asked
+                              users to grant it.
+        INTERACT_ACROSS_USERS_FULL : named by the platform alongside INTERACT_ACROSS_USERS
+                              but not grantable to an ordinary app, so it is never
+                              requested.
+        INTERNET            : the application is local first and has no network stack.
+        QUERY_ALL_PACKAGES  : store-policy sensitive. UID name resolution is characterised,
+                              not solved, in this phase; see docs/data-sources.md.
+        READ_LOGS, location, storage : no feature requires them.
     -->
+    <uses-permission android:name="android.permission.DUMP"
+        tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.INTERACT_ACROSS_USERS"
+        tools:ignore="ProtectedPermissions" />
 
     <application
         android:allowBackup="false"
@@ -27,7 +46,7 @@
         android:icon="@android:drawable/ic_menu_info_details"
         android:label="@string/app_name"
         android:supportsRtl="true"
-        android:theme="@style/Theme.AppCompat.DayNight.NoActionBar">
+        android:theme="@style/Theme.BattInsight">
 
         <!--
           The only exported component, as a launcher entry requires.
@@ -41,6 +60,19 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!--
+          Required by the Shizuku API so the binder can be delivered to this process.
+          It exposes no functionality of ours and is guarded by a permission only the
+          system and Shizuku hold.
+        -->
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:multiprocess="false"
+            android:enabled="true"
+            android:exported="true"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
     </application>
 
 </manifest>

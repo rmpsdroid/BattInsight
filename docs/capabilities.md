@@ -62,3 +62,52 @@ the distinctions so a future merge fails a test rather than passing silently.
 2. Classify on content.
 3. Cache against the current boot ID; re-probe after boot or permission change.
 4. `Unknown` until probed — act as though absent and re-probe.
+
+---
+
+## How capabilities are evaluated
+
+`CapabilityCoordinator` is the only component that talks to the platform. The UI observes
+its `StateFlow<CapabilityReport>` and calls `refresh()`; it never queries `PackageManager`,
+Shizuku, `BatteryManager`, `UsageStatsManager` or runs a command itself. Keeping that in one
+place is what makes the picture internally consistent and testable.
+
+Every dependency is an interface, so the whole evaluation runs on the JVM against fakes.
+There is no polling: capability changes only when the user changes something, so refresh is
+explicit. A refresh already in flight is cancelled first, so a slow evaluation can never
+overwrite a newer one.
+
+### Backends
+
+| Backend | Status |
+|---|---|
+| `GRANTED_APP` | Implemented. Needs DUMP, PACKAGE_USAGE_STATS and INTERACT_ACROSS_USERS |
+| `SHIZUKU_ADB` | Implemented. Needs none of those; measured at uid 2000, `u:r:shell:s0` |
+| `SHIZUKU_ROOT` | **Not implemented, never measured** |
+| `DIRECT_ROOT` | **Not implemented, never measured** |
+
+The two root routes are represented rather than omitted, so the model is honest about what
+is missing instead of quietly pretending the question does not exist. Neither has a fake
+implementation.
+
+Shizuku is preferred when both are usable: it was measured 2-4x faster and resolves UID
+names an app UID cannot.
+
+### Shizuku lifecycle
+
+`NotInstalled`, `InstalledNotRunning`, `RunningNotAuthorised`, `RunningAuthorised`,
+`VersionUnsupported`, `Error`, `Unknown` — separate because they behave separately.
+Installing is not running, and running is not authorised: `pm grant` of Shizuku's own
+`API_V23` permission reported success while Shizuku still refused, because it keeps its own
+client authorisation list.
+
+### Permission state
+
+Reported per permission, never as a single boolean. The platform demands the three in
+sequence, so a caller that only knows "not all granted" cannot tell the user which one to
+grant next.
+
+Usage access has **two valid routes** and either suffices: holding `PACKAGE_USAGE_STATS`,
+or the `GET_USAGE_STATS` app-op being allowed. Requiring the app-op when the permission is
+granted would contradict measurement — after `pm grant` the app-op stayed at `DEFAULT` and
+the query still returned rows.

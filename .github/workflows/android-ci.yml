@@ -8,7 +8,9 @@ name: Android CI
 
 on:
   push:
-    branches: [main]
+    # Feature branches are validated too, so work is checked before it reaches a
+    # pull request rather than accumulating unverified.
+    branches: [main, 'phase*/**', 'feat/**', 'fix/**', 'chore/**']
   pull_request:
     branches: [main]
   workflow_dispatch:

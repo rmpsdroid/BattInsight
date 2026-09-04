@@ -2,6 +2,7 @@ plugins {
     // AGP 9.x provides built-in Kotlin support. The org.jetbrains.kotlin.android plugin
     // must NOT be applied -- AGP rejects it outright. See docs/development.md.
     alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.compose)
 }
 
 android {
@@ -24,6 +25,11 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "0.0.1-foundation"
+
+        // Instrumented tests are how the Shizuku backend is validated against a real
+        // platform. Nothing about the capability architecture can be proven on the JVM
+        // alone -- binder lifecycle, SELinux domain and the shell UID are runtime facts.
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
@@ -46,6 +52,12 @@ android {
     // Kotlin jvmTarget is supplied by AGP's built-in Kotlin support and follows
     // compileOptions. AGP 9.x removed the kotlinOptions block.
 
+    buildFeatures {
+        compose = true
+        // The Shizuku UserService contract is a typed Binder interface.
+        aidl = true
+    }
+
     lint {
         // Lint is a real gate. Do not set abortOnError = false.
         abortOnError = true
@@ -57,11 +69,30 @@ android {
 
     testOptions {
         unitTests.isReturnDefaultValues = true
+        // Real device captures are deliberately not in this repository -- they are ~15 MB
+        // of the maintainer's own device state. RealFixtureValidationTest runs against them
+        // when an archive is pointed at with -Dbattinsight.fixtures=..., and is skipped
+        // otherwise, which is what CI does.
+        unitTests.all { test ->
+            providers.systemProperty(FIXTURE_ARCHIVE_PROPERTY).orNull?.let { path ->
+                test.systemProperty(FIXTURE_ARCHIVE_PROPERTY, path)
+            }
+        }
     }
 }
 
 dependencies {
     implementation(libs.androidx.core.ktx)
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.compose.ui)
+    implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.compose.ui.tooling.preview)
+    debugImplementation(libs.androidx.compose.ui.tooling)
+    implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.shizuku.api)
+    implementation(libs.shizuku.provider)
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.activity)
     implementation(libs.androidx.lifecycle.runtime)
@@ -70,4 +101,12 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+
+    androidTestImplementation(libs.junit)
+    androidTestImplementation(libs.kotlinx.coroutines.test)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.ext.junit)
 }
+
+/** Points RealFixtureValidationTest at an out-of-tree archive of real device captures. */
+val FIXTURE_ARCHIVE_PROPERTY = "battinsight.fixtures"

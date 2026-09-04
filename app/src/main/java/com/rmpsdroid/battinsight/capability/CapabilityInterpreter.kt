@@ -26,6 +26,16 @@ sealed interface SourceReading {
     /** The collection succeeded but contained no section for this capability at all. */
     data object SectionAbsent : SourceReading
 
+    /**
+     * The evidence could not be established because the capture was cut short.
+     *
+     * Distinct from [SectionAbsent]: a payload truncated at the memory ceiling before the
+     * records a probe was looking for is **not** evidence that those records are missing.
+     * Reporting it as absent would turn a self-imposed limit into a false claim about the
+     * device.
+     */
+    data class Incomplete(val reason: String) : SourceReading
+
     /** Nobody has looked yet. The honest default. */
     data object NotInspected : SourceReading
 
@@ -66,11 +76,26 @@ object CapabilityInterpreter {
             // Deliberately not a success and not a failure: we do not know what happened.
             CapabilityState.Unknown
 
+        // Truncation is decided before anything else: a short capture cannot support a
+        // conclusion about what it does or does not contain.
+        is CollectionOutcome.Data, CollectionOutcome.Empty ->
+            if (reading is SourceReading.Incomplete) {
+                CapabilityState.Unknown
+            } else {
+                interpretComplete(outcome, reading)
+            }
+    }
+
+    private fun interpretComplete(
+        outcome: CollectionOutcome,
+        reading: SourceReading,
+    ): CapabilityState = when (outcome) {
         CollectionOutcome.Empty -> when (reading) {
             // A clean exit producing nothing, with nobody having inspected it, tells us
             // very little. Claiming either availability or absence here would be invention.
             SourceReading.NotInspected -> CapabilityState.Unknown
             SourceReading.SectionAbsent -> CapabilityState.SourceUnavailable("no output")
+            is SourceReading.Incomplete -> CapabilityState.Unknown
             is SourceReading.Records -> recordsToState(reading)
         }
 
@@ -79,8 +104,11 @@ object CapabilityInterpreter {
             SourceReading.NotInspected -> CapabilityState.Available
             SourceReading.SectionAbsent ->
                 CapabilityState.SourceUnavailable("section absent from collected data")
+            is SourceReading.Incomplete -> CapabilityState.Unknown
             is SourceReading.Records -> recordsToState(reading)
         }
+
+        else -> CapabilityState.Unknown
     }
 
     private fun recordsToState(reading: SourceReading.Records): CapabilityState = when {

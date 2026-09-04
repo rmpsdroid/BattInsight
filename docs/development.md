@@ -60,7 +60,32 @@ generated.
 - Packages are created only when they hold real code.
 - No dependency is added without a stated reason. There is no network stack.
 
+## UI toolkit: Compose
+
+Compose is used for the Capability Centre and onwards.
+
+The Capability Centre is the first genuinely state-driven screen and the template for every
+later diagnostic screen, so adopting Compose on one screen with no product UI was the
+cheapest possible moment. Two defects in the predecessor's tracker were clipped text on an
+ordinary phone and a broken title at large font scale, both caused by layouts assuming a
+width and a text size — the class of problem Compose handles better by default. Deferring
+would have meant rewriting whatever Views UI accumulated in the meantime.
+
+### Version coupling to watch
+
+AGP supplies Kotlin, but Compose still needs a separate compiler plugin whose version must
+be compatible with it:
+
+```
+alias(libs.plugins.kotlin.compose)   // org.jetbrains.kotlin.plugin.compose
+```
+
+This is the one place where an AGP upgrade can require a matching change elsewhere. If a
+build fails after bumping AGP with a Compose or Kotlin version error, this plugin is the
+first thing to check. Verify a bump with a genuine recompile: Gradle will report
+`FROM-CACHE` and appear to succeed without having compiled anything.
+
 ## Not yet decided
 
-Compose versus Views (Phase 8), the routine acquisition format (Phase 7), dependency
-injection, the Room schema (Phase 6), and the final brand and package identifier.
+The routine acquisition format (protobuf versus checkin), dependency injection, and the Room
+schema.
