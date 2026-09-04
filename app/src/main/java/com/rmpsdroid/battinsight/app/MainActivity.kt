@@ -30,6 +30,10 @@ import com.rmpsdroid.battinsight.platform.AndroidPackageResolutionSource
 import com.rmpsdroid.battinsight.platform.AndroidPermissionStateReader
 import com.rmpsdroid.battinsight.platform.AndroidShizukuGateway
 import com.rmpsdroid.battinsight.platform.AndroidUsageAccessSource
+import com.rmpsdroid.battinsight.batterystats.BatteryStatsCollector
+import com.rmpsdroid.battinsight.batterystats.CaptureClock
+import com.rmpsdroid.battinsight.collection.BackendIdentity
+import com.rmpsdroid.battinsight.collection.BackendKind
 import com.rmpsdroid.battinsight.persistence.BattInsightDatabase
 import com.rmpsdroid.battinsight.persistence.RoomSessionStateStore
 import com.rmpsdroid.battinsight.persistence.StorageCounts
@@ -93,6 +97,57 @@ class BattInsightViewModel(context: Context) : ViewModel() {
             AccessModeBackendSelector(accessMode).select(shizuku, grantedApp)
         },
     )
+
+    /**
+     * Turns a privileged capture into a decoded model.
+     *
+     * Holds no runner of its own: the active backend comes from the capability report at the
+     * moment of capture, so access selection stays exactly where Phase 4 put it.
+     */
+    private val collector = BatteryStatsCollector(
+        clock = object : CaptureClock {
+            override fun elapsedRealtimeMillis() = android.os.SystemClock.elapsedRealtime()
+            override fun wallClockMillis() = System.currentTimeMillis()
+        },
+    )
+
+    private val _collectorState = MutableStateFlow<CollectorUiState>(CollectorUiState.Idle)
+    val collectorState: StateFlow<CollectorUiState> = _collectorState.asStateFlow()
+
+    /**
+     * Captures batterystats once, through whichever backend access setup selected.
+     *
+     * Nothing is persisted. The payload is decoded, the counts are published, and the bytes
+     * are released with the local -- Phase 7A keeps privileged data in memory only, and the
+     * Room schema stays at version 1.
+     */
+    fun captureBatteryStats() {
+        if (_collectorState.value is CollectorUiState.Capturing) return
+        _collectorState.value = CollectorUiState.Capturing
+        viewModelScope.launch {
+            val active = capability.report.value.selection.active
+            val runner = when (active) {
+                BackendKind.SHIZUKU_ADB -> shizukuRunner
+                BackendKind.GRANTED_APP -> grantedAppRunner
+                else -> null
+            }
+            if (runner == null) {
+                _collectorState.value = CollectorUiState.Failed(
+                    com.rmpsdroid.battinsight.batterystats.DecodeOutcome.PERMISSION_DENIAL_PAYLOAD,
+                    "no usable backend is selected",
+                )
+                return@launch
+            }
+            val kind = if (active == BackendKind.SHIZUKU_ADB) {
+                BackendIdentity.Kind.SHELL
+            } else {
+                BackendIdentity.Kind.APP_UID
+            }
+            _collectorState.value = CollectorUiState.from(
+                collector.collect(runner, kind, android.os.Build.VERSION.RELEASE),
+            )
+        }
+    }
 
     private val setup = AccessSetupCoordinator(
         preferences = preferences,
@@ -261,6 +316,7 @@ private fun BattInsightApp() {
         val lastRevoke by vm.lastRevoke.collectAsStateWithLifecycle()
         val sessionStatus by vm.sessionStatus.collectAsStateWithLifecycle()
         val storageCounts by vm.storageCounts.collectAsStateWithLifecycle()
+        val collectorState by vm.collectorState.collectAsStateWithLifecycle()
 
         // Leaving a secondary screen goes back to the main one rather than out of the app.
         BackHandler(enabled = screen != Screen.CapabilityCentre && mode.isChosen) {
@@ -293,6 +349,8 @@ private fun BattInsightApp() {
                 mode = mode,
                 sessionStatus = sessionStatus,
                 storageCounts = storageCounts,
+                collectorState = collectorState,
+                onCapture = vm::captureBatteryStats,
                 onRefresh = vm::refreshCapabilities,
                 onManageAccess = vm::openManageAccess,
             )
