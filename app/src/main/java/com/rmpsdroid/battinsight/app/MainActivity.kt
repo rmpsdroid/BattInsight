@@ -23,7 +23,9 @@ import com.rmpsdroid.battinsight.capability.CapabilityCoordinator
 import com.rmpsdroid.battinsight.capability.CapabilityReport
 import com.rmpsdroid.battinsight.collection.AccessModeBackendSelector
 import com.rmpsdroid.battinsight.platform.AndroidAccessPreferenceStore
+import com.rmpsdroid.battinsight.platform.AndroidBatterySource
 import com.rmpsdroid.battinsight.platform.AndroidBatteryPropertySource
+import com.rmpsdroid.battinsight.platform.AndroidBootIdentitySource
 import com.rmpsdroid.battinsight.platform.AndroidPackageResolutionSource
 import com.rmpsdroid.battinsight.platform.AndroidPermissionStateReader
 import com.rmpsdroid.battinsight.platform.AndroidShizukuGateway
@@ -31,6 +33,9 @@ import com.rmpsdroid.battinsight.platform.AndroidUsageAccessSource
 import com.rmpsdroid.battinsight.platform.GrantedAppProcessRunner
 import com.rmpsdroid.battinsight.setup.AccessSetupCoordinator
 import com.rmpsdroid.battinsight.setup.GrantStep
+import com.rmpsdroid.battinsight.session.SessionCoordinator
+import com.rmpsdroid.battinsight.session.SessionStatus
+import com.rmpsdroid.battinsight.session.SessionTrigger
 import com.rmpsdroid.battinsight.setup.SetupState
 import com.rmpsdroid.battinsight.shizuku.ShizukuGateway
 import com.rmpsdroid.battinsight.shizuku.ShizukuUserServiceRunner
@@ -96,8 +101,20 @@ class BattInsightViewModel(context: Context) : ViewModel() {
         scope = viewModelScope,
     )
 
+    /**
+     * The battery session engine.
+     *
+     * Deliberately independent of the capability and access layers. A battery interval is a
+     * fact about the device, and nothing about which backend is selected, or which
+     * permissions are held, may move it.
+     */
+    private val batterySource = AndroidBatterySource(appContext, AndroidBootIdentitySource())
+
+    private val sessions = SessionCoordinator(scope = viewModelScope)
+
     val report: StateFlow<CapabilityReport> = capability.report
     val setupState: StateFlow<SetupState> = setup.state
+    val sessionStatus: StateFlow<SessionStatus> = sessions.status
 
     private val _screen = MutableStateFlow<Screen>(Screen.Setup)
     val screen: StateFlow<Screen> = _screen.asStateFlow()
@@ -125,6 +142,14 @@ class BattInsightViewModel(context: Context) : ViewModel() {
             }
         }
         setup.refresh()
+
+        // Establish session state from a current reading, then follow live transitions.
+        // Reconciliation happens first and only once: it is the only thing that can account
+        // for what changed while the process did not exist.
+        viewModelScope.launch {
+            batterySource.readCurrent(SessionTrigger.APP_START)?.let { sessions.begin(it) }
+            batterySource.observations().collect { sessions.observe(it) }
+        }
     }
 
     // ------------------------------------------------------------------------ navigation
@@ -216,6 +241,7 @@ private fun BattInsightApp() {
         val mode by vm.mode.collectAsStateWithLifecycle()
         val revoking by vm.revoking.collectAsStateWithLifecycle()
         val lastRevoke by vm.lastRevoke.collectAsStateWithLifecycle()
+        val sessionStatus by vm.sessionStatus.collectAsStateWithLifecycle()
 
         // Leaving a secondary screen goes back to the main one rather than out of the app.
         BackHandler(enabled = screen != Screen.CapabilityCentre && mode.isChosen) {
@@ -246,6 +272,7 @@ private fun BattInsightApp() {
             Screen.CapabilityCentre -> CapabilityCentreScreen(
                 report = report,
                 mode = mode,
+                sessionStatus = sessionStatus,
                 onRefresh = vm::refreshCapabilities,
                 onManageAccess = vm::openManageAccess,
             )
