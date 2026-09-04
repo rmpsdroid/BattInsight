@@ -1,10 +1,9 @@
 package com.rmpsdroid.battinsight.persistence
 
-import androidx.room.Dao
-import androidx.room.Insert
-import androidx.room.OnConflictStrategy
-import androidx.room.Query
-import androidx.room.Transaction
+import androidx.room3.Dao
+import androidx.room3.Query
+import androidx.room3.Transaction
+import androidx.room3.Upsert
 
 /**
  * The only way anything reaches the database.
@@ -12,9 +11,22 @@ import androidx.room.Transaction
  * All suspending, so nothing here can block the main thread. Room enforces that for suspend
  * DAO functions by dispatching them off the caller's thread.
  *
- * The writes are `REPLACE` upserts because a transition legitimately rewrites rows it has
- * already written -- a session's `latest_snapshot_id` moves forward on every accepted
- * observation, and the single engine-state row is overwritten every time.
+ * The writes are [Upsert], and that is a correctness choice rather than a style one.
+ *
+ * They began as `@Insert(onConflict = REPLACE)`, which compiles to SQLite's
+ * `INSERT OR REPLACE`. SQLite resolves a primary-key collision there by *deleting* the
+ * existing row and inserting a new one, which was measured directly: advancing a session's
+ * `latest_snapshot_id` moved its rowid from 1 to 2, so an ordinary field update was
+ * destroying and recreating the row.
+ *
+ * Nothing was lost that time, only because every foreign key here is `NO_ACTION` and the
+ * reinsert happens inside the same statement. That is a coincidence of the current schema,
+ * not a property of the operation: the day any child row is added with `ON DELETE CASCADE`,
+ * the same "update" silently deletes it. Delete-and-reinsert is simply not what is meant when
+ * a session's latest snapshot advances or the engine-state row is refreshed.
+ *
+ * `@Upsert` generates a real `ON CONFLICT ... DO UPDATE`, which changes the existing row in
+ * place and leaves its identity alone.
  */
 @Dao
 interface SessionDao {
@@ -48,13 +60,13 @@ interface SessionDao {
 
     // ----------------------------------------------------------------------- writes
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Upsert
     suspend fun upsertSnapshots(snapshots: List<SnapshotEntity>)
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Upsert
     suspend fun upsertSessions(sessions: List<SessionEntity>)
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Upsert
     suspend fun upsertEngineState(state: EngineStateEntity)
 
     @Query("DELETE FROM engine_state")
