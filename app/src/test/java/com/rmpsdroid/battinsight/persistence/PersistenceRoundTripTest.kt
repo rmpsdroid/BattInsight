@@ -382,14 +382,12 @@ class PersistenceRoundTripTest {
      */
     @Test
     fun `an inconsistent graph loads as corrupt, never as empty`() = runTest {
-        db.openHelper.writableDatabase.let { raw ->
-            raw.execSQL("PRAGMA foreign_keys = OFF")
-            raw.execSQL(
-                "INSERT INTO engine_state (id, session_id, last_accepted_snapshot_id, " +
-                    "counter_generation) VALUES (0, '${uuid(999)}', NULL, 1)",
-            )
-            raw.execSQL("PRAGMA foreign_keys = ON")
-        }
+        db.execSql("PRAGMA foreign_keys = OFF")
+        db.execSql(
+            "INSERT INTO engine_state (id, session_id, last_accepted_snapshot_id, " +
+                "counter_generation) VALUES (0, '${uuid(999)}', NULL, 1)",
+        )
+        db.execSql("PRAGMA foreign_keys = ON")
 
         val loaded = store.load()
         assertTrue("expected a failure, was $loaded", loaded is StoredState.Failed)

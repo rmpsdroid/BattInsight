@@ -3,11 +3,10 @@ plugins {
     // must NOT be applied -- AGP rejects it outright. See docs/development.md.
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
-    // Room needs an annotation processor. KSP is preferred over KAPT: it is faster and
-    // is what Room documents. The KSP version must track the Kotlin the toolchain uses.
+    // Room 3 generates Kotlin and supports KSP only -- KAPT is not an option.
     alias(libs.plugins.ksp)
-    // The Room Gradle plugin owns the schema directory, so exported schemas land in a
-    // source-controlled location rather than a build output.
+    // The androidx.room3 Gradle plugin owns the schema directory, so exported schemas land
+    // in a source-controlled location rather than a build output.
     alias(libs.plugins.room)
 }
 
@@ -100,12 +99,15 @@ dependencies {
      * adds nothing to the APK that was not already in it. It only sets the version when
      * something else drags it in, which DataStore 1.2.1 does at 1.7.3.
      *
-     * Room 2.8.4 reads its exported schemas through serializers generated against 1.8.x, and
-     * on 1.7.3 they fail at runtime with `AbstractMethodError: typeParametersSerializers()`.
-     * The reason the fix belongs on the *application* classpath, when only the migration
-     * tests need it, is AGP's consistent resolution: the androidTest classpath is pinned to
-     * whatever the app runtime resolved, so raising it here is the only place that works.
-     * Remove once DataStore ships 1.8.x and the versions agree on their own.
+     * Re-measured for Room 3.0.2 rather than carried over from Room 2. Still required:
+     * room3-migration-jvm:3.0.2 declares kotlinx-serialization-json-jvm 1.8.1, and with the
+     * constraint removed the androidTest classpath resolves 1.7.3 instead, because AGP's
+     * consistent resolution pins it to whatever the application runtime resolved. Room reads
+     * its exported schemas through serializers generated against 1.8.x, which fail on 1.7.3
+     * with `AbstractMethodError: typeParametersSerializers()`.
+     *
+     * That is also why the fix belongs on the *application* classpath when only the migration
+     * tests need it. Remove once DataStore ships 1.8.x and the versions agree on their own.
      */
     constraints {
         implementation(libs.kotlinx.serialization.json)
@@ -116,9 +118,9 @@ dependencies {
     // Stores the access-mode preference. Nothing diagnostic is ever persisted.
     implementation(libs.androidx.datastore.preferences)
     // Room: the battery session domain, stored as explicit typed columns.
-    implementation(libs.androidx.room.runtime)
-    implementation(libs.androidx.room.ktx)
-    ksp(libs.androidx.room.compiler)
+    implementation(libs.androidx.room3.runtime)
+    implementation(libs.androidx.sqlite.framework)
+    ksp(libs.androidx.room3.compiler)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.material3)
@@ -141,13 +143,13 @@ dependencies {
     // exercises the real database, real SQLite and the real schema rather than a fake.
     testImplementation(libs.robolectric)
     testImplementation(libs.androidx.test.ext.junit)
-    testImplementation(libs.androidx.room.testing)
+    testImplementation(libs.androidx.room3.testing)
 
     androidTestImplementation(libs.junit)
     androidTestImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.ext.junit)
-    androidTestImplementation(libs.androidx.room.testing)
+    androidTestImplementation(libs.androidx.room3.testing)
 }
 
 /**
@@ -157,7 +159,7 @@ dependencies {
  * output cannot be diffed in review, and a migration written against a schema nobody can see
  * is a migration nobody can check.
  */
-room {
+room3 {
     schemaDirectory("$projectDir/schemas")
 }
 

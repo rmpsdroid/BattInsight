@@ -13,8 +13,6 @@ import com.rmpsdroid.battinsight.session.SessionTransition
 import com.rmpsdroid.battinsight.session.StoredState
 import com.rmpsdroid.battinsight.session.TransitionResult
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.isActive
 
 /** How many stored rows exist. Counts only -- never a dump of their contents. */
 data class StorageCounts(val sessions: Int, val snapshots: Int)
@@ -86,7 +84,7 @@ class RoomSessionStateStore(
                 ),
             )
         } catch (t: Throwable) {
-            if (isCallerCancellation(t)) throw t
+            if (t is CancellationException) throw t
             val failure = classify(t)
             StoredState.Failed(failure.outcome, failure.detail)
         }
@@ -146,27 +144,11 @@ class RoomSessionStateStore(
     suspend fun counts(): StorageCounts? = try {
         StorageCounts(sessions = dao.sessionCount(), snapshots = dao.snapshotCount())
     } catch (t: Throwable) {
-        if (isCallerCancellation(t)) throw t
+        if (t is CancellationException) throw t
         null
     }
 
     // ------------------------------------------------------------------------ internals
-
-    /**
-     * Whether a thrown [CancellationException] belongs to our caller.
-     *
-     * It usually does, and must then be rethrown: swallowing a real cancellation breaks
-     * structured concurrency. But Room signals a closed database the same way -- measured:
-     * a query after `close()` throws `JobCancellationException` from Room's own internal
-     * scope, while the caller's coroutine is perfectly healthy.
-     *
-     * Rethrowing that one would cancel the session coordinator because a database went away,
-     * which is both wrong and very hard to diagnose. So the caller's own context decides: if
-     * it is still active, the cancellation came from somewhere else and is a failure to
-     * classify rather than a signal to unwind.
-     */
-    private suspend fun isCallerCancellation(t: Throwable): Boolean =
-        t is CancellationException && !currentCoroutineContext().isActive
 
     private fun engineStateEntity(state: SessionEngineState) = EngineStateEntity(
         sessionId = state.session?.id?.toString(),
@@ -178,7 +160,7 @@ class RoomSessionStateStore(
         block()
         PersistenceResult.Success
     } catch (t: Throwable) {
-        if (isCallerCancellation(t)) throw t
+        if (t is CancellationException) throw t
         classify(t)
     }
 
@@ -198,8 +180,8 @@ class RoomSessionStateStore(
             t.message ?: "a database constraint refused the write",
         )
         is IllegalStateException -> {
-            // Room throws IllegalStateException for a closed database, and for a migration
-            // that is required but not supplied.
+            // Room throws IllegalStateException for a closed database ("Database is closed",
+            // measured on Room 3.0.2) and for a migration that is required but not supplied.
             val message = t.message.orEmpty()
             val outcome = when {
                 message.contains("Migration", ignoreCase = true) ->
@@ -211,13 +193,6 @@ class RoomSessionStateStore(
         is SQLiteException -> PersistenceResult.Failure(
             PersistenceOutcome.DATABASE_UNAVAILABLE,
             t.message ?: "the database could not be used",
-        )
-        // Reached only when the caller's own coroutine is still active -- see
-        // isCallerCancellation. Room throws this from its internal scope when the database
-        // has been closed underneath us.
-        is CancellationException -> PersistenceResult.Failure(
-            PersistenceOutcome.DATABASE_UNAVAILABLE,
-            "the database was closed while the operation was in flight",
         )
         else -> PersistenceResult.Failure(
             PersistenceOutcome.UNKNOWN,

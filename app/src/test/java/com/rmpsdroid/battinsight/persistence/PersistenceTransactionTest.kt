@@ -303,7 +303,7 @@ class PersistenceTransactionTest {
         // which would make this test prove nothing.
         val file = java.io.File.createTempFile("battinsight-reopen", ".db").also { it.delete() }
         try {
-            val first = androidx.room.Room.databaseBuilder(
+            val first = androidx.room3.Room.databaseBuilder(
                 androidx.test.core.app.ApplicationProvider.getApplicationContext(),
                 BattInsightDatabase::class.java,
                 file.absolutePath,
@@ -313,7 +313,7 @@ class PersistenceTransactionTest {
             val sessionId = transition.state.session!!.id
             first.close()
 
-            val second = androidx.room.Room.databaseBuilder(
+            val second = androidx.room3.Room.databaseBuilder(
                 androidx.test.core.app.ApplicationProvider.getApplicationContext(),
                 BattInsightDatabase::class.java,
                 file.absolutePath,
@@ -331,35 +331,29 @@ class PersistenceTransactionTest {
     // ------------------------------------------------------------- a closed database
 
     /**
-     * What a closed database actually does, which is not what it was assumed to do.
+     * A closed database is reported, not swallowed and not rethrown.
      *
-     * Measured, and both halves were surprising:
+     * Worth stating what this replaced. Under Room 2.8.4 both halves of this were different
+     * and worse: a plain DAO call threw `JobCancellationException` from Room's own internal
+     * scope, so the obvious handler -- rethrow every `CancellationException` -- would have
+     * cancelled the session coordinator *because a database went away*; and a `@Transaction`
+     * did not fail at all, because Room reopened the database underneath it and wrote into
+     * the reopened one.
      *
-     *  - A plain DAO call after `close()` throws `JobCancellationException`, not an
-     *    `SQLiteException`. Room signals it by cancelling its own internal scope. The obvious
-     *    handler -- rethrow every `CancellationException` -- would have propagated that into
-     *    the session coordinator and cancelled it because a database went away. The store
-     *    instead asks whether the *caller's* context is still active, and classifies this one.
-     *
-     *  - A `@Transaction` function does not throw at all. Room reopens the database
-     *    underneath it and the write succeeds, leaving `isOpen` true again.
-     *
-     * So this is a characterisation, not a requirement: the write path survives a close and
-     * the read path reports it. Nothing in the application closes the database -- the instance
-     * is a process-lifetime singleton -- so neither behaviour is load-bearing. It is written
-     * down because the asymmetry is invisible in the API and would otherwise be rediscovered
-     * as a bug. The write-failure semantics that *do* matter are proven above, against a
-     * violated constraint rather than a closed handle.
+     * Room 3.0.2 throws `IllegalStateException("Database is closed")` from both paths. That
+     * is an ordinary, documented failure, so the store classifies it and the special-case
+     * cancellation handling that Room 2 required is gone rather than carried forward.
      */
     @Test
-    fun `Room reopens a closed database on the transaction path`() = runTest {
+    fun `writing to a closed database is reported, not swallowed`() = runTest {
         val transition = engine.reconcile(null, observation(0, trigger = SessionTrigger.APP_START))
         db.close()
 
         val result = store.persist(transition)
 
-        assertTrue("the transaction path reopens rather than failing", result.succeeded)
-        assertTrue("and the database really is open again", db.isOpen)
+        assertTrue("a closed database must not report success", !result.succeeded)
+        assertEquals(PersistenceOutcome.DATABASE_UNAVAILABLE, result.failureOrNull!!.outcome)
+        assertTrue("and it must explain itself", result.failureOrNull!!.detail.isNotBlank())
     }
 
     @Test
@@ -386,7 +380,7 @@ class PersistenceTransactionTest {
  * `persistTransition` to the real DAO, which would bypass an override of `upsertSnapshots`
  * entirely and quietly make the test pass for the wrong reason.
  */
-private class DroppingSnapshotDao(private val real: SessionDao) : SessionDao {
+internal class DroppingSnapshotDao(private val real: SessionDao) : SessionDao {
     override suspend fun engineState(id: Int) = real.engineState(id)
     override suspend fun session(sessionId: String) = real.session(sessionId)
     override suspend fun snapshots(ids: List<String>) = real.snapshots(ids)

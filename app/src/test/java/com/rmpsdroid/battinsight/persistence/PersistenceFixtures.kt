@@ -1,6 +1,8 @@
 package com.rmpsdroid.battinsight.persistence
 
-import androidx.room.Room
+import androidx.room3.Room
+import androidx.room3.useReaderConnection
+import androidx.room3.useWriterConnection
 import androidx.test.core.app.ApplicationProvider
 import com.rmpsdroid.battinsight.session.BatteryHealth
 import com.rmpsdroid.battinsight.session.BatteryObservation
@@ -33,8 +35,27 @@ fun testDatabase(): BattInsightDatabase = Room.inMemoryDatabaseBuilder(
 )
     // Foreign keys are the point of several of these tests, and an in-memory builder does
     // not enable them by default the way the production builder path does.
-    .setJournalMode(androidx.room.RoomDatabase.JournalMode.TRUNCATE)
+    .setJournalMode(androidx.room3.RoomDatabase.JournalMode.TRUNCATE)
     .build()
+
+/**
+ * Raw SQL, for the few tests that must reach past Room to set up or inspect a state the DAO
+ * deliberately cannot express.
+ *
+ * Room 3 removed `SupportSQLiteDatabase`, `openHelper.writableDatabase` and the `Cursor` API
+ * entirely; connections are borrowed and statements are stepped instead. These two helpers
+ * keep that plumbing out of the tests, which are about the schema rather than about the
+ * driver.
+ */
+suspend fun BattInsightDatabase.execSql(sql: String) {
+    useWriterConnection { connection -> connection.usePrepared(sql) { it.step() } }
+}
+
+/** The first column of the first row, or null if the query returned nothing. */
+suspend fun BattInsightDatabase.queryLong(sql: String): Long? =
+    useReaderConnection { connection ->
+        connection.usePrepared(sql) { if (it.step()) it.getLong(0) else null }
+    }
 
 const val EPOCH = 1_700_000_000_000L
 const val MINUTE = 60_000L
