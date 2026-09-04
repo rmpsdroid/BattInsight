@@ -1,6 +1,7 @@
 package com.rmpsdroid.battinsight.setup
 
 import com.rmpsdroid.battinsight.access.AccessMode
+import com.rmpsdroid.battinsight.access.FakeAccessPreferenceStore
 import com.rmpsdroid.battinsight.capability.FakeProcessRunner
 import com.rmpsdroid.battinsight.capability.FakeShizukuGateway
 import com.rmpsdroid.battinsight.capability.MeasuredDenials

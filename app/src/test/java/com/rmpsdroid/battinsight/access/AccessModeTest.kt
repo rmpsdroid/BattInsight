@@ -4,7 +4,6 @@ import com.rmpsdroid.battinsight.collection.AccessModeBackendSelector
 import com.rmpsdroid.battinsight.collection.BackendAvailability
 import com.rmpsdroid.battinsight.collection.BackendIdentity
 import com.rmpsdroid.battinsight.collection.BackendKind
-import com.rmpsdroid.battinsight.setup.FakeAccessPreferenceStore
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse

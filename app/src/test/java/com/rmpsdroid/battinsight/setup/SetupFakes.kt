@@ -1,16 +1,11 @@
 package com.rmpsdroid.battinsight.setup
 
-import com.rmpsdroid.battinsight.access.AccessMode
-import com.rmpsdroid.battinsight.access.AccessPreferenceStore
 import com.rmpsdroid.battinsight.permissions.AppOpMode
 import com.rmpsdroid.battinsight.permissions.PermissionGrant
 import com.rmpsdroid.battinsight.permissions.PermissionSnapshot
 import com.rmpsdroid.battinsight.permissions.PermissionStateReader
 import com.rmpsdroid.battinsight.permissions.PermissionStatus
 import com.rmpsdroid.battinsight.permissions.RequiredPermission
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * Fakes for the setup seams.
@@ -115,31 +110,4 @@ class UnavailableSetupExecutor(private val reason: String = "Shizuku is not auth
         attempted += action
         return SetupOutcome.Unavailable(reason)
     }
-}
-
-/**
- * An in-memory preference store.
- *
- * [recreate] returns a store sharing the same backing value, which is how a test checks
- * that a choice survives process death without needing a real DataStore.
- */
-class FakeAccessPreferenceStore(
-    initial: AccessMode = AccessMode.NOT_CHOSEN,
-    private val backing: MutableStateFlow<AccessMode> = MutableStateFlow(initial),
-) : AccessPreferenceStore {
-
-    var writes = 0
-        private set
-
-    override val accessMode: Flow<AccessMode> = backing.asStateFlow()
-
-    override suspend fun current(): AccessMode = backing.value
-
-    override suspend fun setAccessMode(mode: AccessMode) {
-        writes++
-        backing.value = mode
-    }
-
-    /** A fresh store over the same persisted value, as a restart would produce. */
-    fun recreate(): FakeAccessPreferenceStore = FakeAccessPreferenceStore(backing = backing)
 }
