@@ -9,8 +9,20 @@ session. All three backends produced structurally equivalent output.
 | Format | Argument | Size (A16) | Speed | Role |
 |---|---|---|---|---|
 | **PROTO** | `--proto` | 91 KB | fastest | Aggregate. Typed. Candidate for routine snapshots |
-| **CHECKIN** | `-c` | 818 KB | ~2× slower | Aggregate **and** history. Documented and CTS-covered |
+| **CHECKIN** | `-c` | 818 KB | ~2× slower | Aggregate **and** history. Documented; the format has CTS coverage (see below) |
 | **TEXT** | *(none)* | 2.5–3.1 MB | slowest | Human reading only. **Not a parser input** |
+
+### What CTS actually covers
+
+CTS's `BatteryStatsDumpsysTest` exercises `dumpsys batterystats --checkin`. So the **checkin
+format** -- the aggregate record grammar this project parses -- carries CTS coverage, which is
+what binds OEMs to keep it well-formed.
+
+It does **not** follow that the `-c` stream is itself CTS-tested. `-c` returns the same
+aggregate records plus an interleaved history block, and that interleaving is not what the CTS
+test drives. BattInsight's own tests are what validate it: the decoder's real-capture cases
+assert exact history-block line counts on both measured platforms, and a regression test pins
+the two ways history lines were previously mistaken for aggregate records.
 
 **No format is designated primary.** Phase 1A favoured CHECKIN on documentation and
 CTS-coverage grounds; Phase 1B then measured PROTO at roughly one ninth the size and about

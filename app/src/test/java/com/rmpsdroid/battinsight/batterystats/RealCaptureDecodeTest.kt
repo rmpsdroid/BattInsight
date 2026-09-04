@@ -4,6 +4,7 @@ import com.rmpsdroid.battinsight.collection.BackendIdentity
 import com.rmpsdroid.battinsight.collection.SourceFormat
 import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
@@ -191,7 +192,8 @@ class RealCaptureDecodeTest {
 
         val capture = assertSuccess(CheckinDecoder().decode(payload, metadataFor(payload)))
 
-        assertTrue("many tags go undecoded in 7A", capture.unsupportedTags.size > 10)
+        // Android 16 emits 46 distinct aggregate record types; this phase decodes 4.
+        assertEquals("distinct undecoded record types", 42, capture.unsupportedTags.size)
         assertTrue("including per-process records", capture.unsupportedTags.containsKey("pr"))
         assertTrue(
             "and the fact is surfaced as a warning",
@@ -201,6 +203,29 @@ class RealCaptureDecodeTest {
         listOf("vers", "uid", "kwl", "wl").forEach {
             assertTrue("$it is decoded", !capture.unsupportedTags.containsKey(it))
         }
+    }
+
+    /**
+     * String-pool lines are history, not aggregate records.
+     *
+     * `9,hsp,<index>,<uid>,"<string>"` puts a **UID** exactly where an aggregate record puts
+     * its tag. Treating it as a record turned every distinct UID in the pool into a fictional
+     * record type -- 124 of them on this capture against 42 real ones, which made the
+     * "undecoded record types" figure meaningless and put it on screen.
+     *
+     * This is the same defect class as the `h` lines, found later, in the same place.
+     */
+    @Test
+    fun `history string-pool lines do not become fictional record types`() {
+        val payload = fixture(A16_PRODUCTION) ?: return skip()
+
+        val capture = assertSuccess(CheckinDecoder().decode(payload, metadataFor(payload)))
+
+        assertEquals("the real number of undecoded record types", 42, capture.unsupportedTags.size)
+        // Every key must be a tag name, never a bare number lifted out of a string-pool line.
+        val numeric = capture.unsupportedTags.keys.filter { it.toLongOrNull() != null }
+        assertEquals("no UID may appear as a record type", emptyList<String>(), numeric)
+        assertTrue("and the pool is counted as history", capture.historyLineCount > 38_000)
     }
 
     /**
@@ -270,7 +295,8 @@ class RealCaptureDecodeTest {
 
         val capture = assertSuccess(CheckinDecoder().decode(payload, metadataFor(payload)))
 
-        assertEquals("Phase 1A measured 38,689 history lines", 38_689, capture.historyLineCount)
+        // 38,689 event lines plus 232 string-pool lines. Both are the history block.
+        assertEquals("history events plus string pool", 38_921, capture.historyLineCount)
         assertEquals(36, capture.version.checkinVersion)
         assertEquals("aggregate records survive the mixture", 68, capture.kernelWakelockCount)
         assertEquals(315, capture.partialWakelockCount)
@@ -291,7 +317,8 @@ class RealCaptureDecodeTest {
 
         val capture = assertSuccess(CheckinDecoder().decode(payload, metadataFor(payload)))
 
-        assertEquals("Phase 1A measured 51,639 history lines", 51_639, capture.historyLineCount)
+        // 51,639 event lines plus 169 string-pool lines.
+        assertEquals("history events plus string pool", 51_808, capture.historyLineCount)
         assertEquals(34, capture.version.checkinVersion)
         assertEquals(108, capture.kernelWakelockCount)
         assertEquals(231, capture.partialWakelockCount)
@@ -309,21 +336,34 @@ class RealCaptureDecodeTest {
     @Test
     fun `partial wakelock values are not the full-wakelock values`() {
         val payload = fixture(A10_PRODUCTION) ?: return skip()
-        val capture = assertSuccess(CheckinDecoder().decode(payload, metadataFor(payload)))
 
-        val line = payload.toString(Charsets.UTF_8).lineSequence()
-            .firstOrNull { it.startsWith("9,1000,l,wl,WindowManager,") }
-        assumeTrue("this capture has no WindowManager wakelock", line != null)
+        // Any wakelock whose full and partial totals differ will do. Pinning a specific name
+        // made this skip on a capture that happened not to contain it, and a test that skips
+        // is a test that proves nothing.
+        val line = payload.toString(Charsets.UTF_8).lineSequence().firstOrNull { candidate ->
+            val f = CheckinDecoder.splitCheckinLine(candidate)
+            f.size >= 16 && f.getOrNull(3) == "wl" &&
+                f[6].trim() == "f" && f[12].trim() == "p" &&
+                f[5].trim().toLongOrNull()?.let { it > 0L } == true &&
+                f[5].trim() != f[11].trim()
+        }
+        assumeTrue("this capture has no wakelock with differing full and partial totals", line != null)
 
         val fields = CheckinDecoder.splitCheckinLine(line!!)
-        // 9,1000,l,wl,WindowManager,7713,f,3,-1,-1,-1,0,p,0,0,0,0,0,bp,...
-        assertEquals("full total time sits at index 5", "7713", fields[5].trim())
-        assertEquals("the 'f' marker is second in its group", "f", fields[6].trim())
-        assertEquals("partial total time sits at index 11", "0", fields[11].trim())
-        assertEquals("the 'p' marker is second in its group", "p", fields[12].trim())
+        val fullTotal = fields[5].trim().toLong()
+        val partialTotal = fields[11].trim().toLong()
+        val uid = fields[1].trim().toInt()
+        val name = fields[4]
 
-        val decoded = capture.partialWakelocks.first { it.uid == 1000 && it.name == "WindowManager" }
-        assertEquals("the partial figure, not the full 7713", 0L, decoded.totalTimeMillis)
+        val capture = assertSuccess(CheckinDecoder().decode(payload, metadataFor(payload)))
+        val decoded = capture.partialWakelocks.first { it.uid == uid && it.name == name }
+
+        assertEquals("the partial figure is what is stored", partialTotal, decoded.totalTimeMillis)
+        assertNotEquals(
+            "and it is not the full figure, which sits three fields earlier",
+            fullTotal,
+            decoded.totalTimeMillis,
+        )
     }
 
     // ------------------------------------------------------------------------ helpers

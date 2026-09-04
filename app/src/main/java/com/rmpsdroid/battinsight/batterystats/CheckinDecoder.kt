@@ -102,7 +102,7 @@ class CheckinDecoder : BatteryStatsDecoder {
             //
             // Production captures with `-c` always contain history: `-c` returns the
             // aggregate block *and* the history in one call, which is why Phase 1A chose it.
-            if (fields.size >= 2 && fields[UID_FIELD].trim() == HISTORY_MARKER) {
+            if (fields.size >= 2 && fields[UID_FIELD].trim() in HISTORY_MARKERS) {
                 historyLines++
                 continue
             }
@@ -509,8 +509,19 @@ class CheckinDecoder : BatteryStatsDecoder {
         private const val TAG = 3
         private const val MIN_FIELDS = 4
 
-        /** Field 1 of a history line, in place of a UID. AOSP's `HISTORY_DATA`. */
-        private const val HISTORY_MARKER = "h"
+        /**
+         * Field 1 of a history-block line, in place of a UID.
+         *
+         * Two of them, and missing the second was a real defect. `h` is a history event;
+         * `hsp` is the history string pool, shaped `9,hsp,<index>,<uid>,"<string>"`. Because
+         * `hsp` puts a **UID** where an aggregate record puts its tag, treating it as an
+         * aggregate record turned every distinct UID in the pool into a fictional record
+         * type: 124 of them on one Android 16 capture, against 42 real ones.
+         *
+         * These are the only two non-numeric values field 1 takes across all four measured
+         * captures, which is what makes an explicit set safe rather than a guess.
+         */
+        private val HISTORY_MARKERS = setOf("h", "hsp")
 
         private const val VERS = "vers"
         private const val UID = "uid"

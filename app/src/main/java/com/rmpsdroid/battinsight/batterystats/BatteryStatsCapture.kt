@@ -30,20 +30,27 @@ data class BatteryStatsCapture(
     /** Numeric UID to package names. A UID may map to many packages, or to none. */
     val uidPackages: List<UidPackageMapping>,
     /**
-     * Record tags seen but not decoded, with how many of each.
+     * Aggregate record tags seen but not decoded, keyed by tag with an occurrence count.
+     *
+     * `size` is therefore the number of distinct undecoded *record types*, not the number of
+     * undecoded records. Measured on Android 16: 46 distinct aggregate tags, 4 decoded, 42
+     * left here.
      *
      * Present so "we did not decode this" is visible and countable rather than silently
      * indistinguishable from "the device did not report this".
      */
     val unsupportedTags: Map<String, Int>,
     /**
-     * How many battery-history lines the payload carried.
+     * How many history-block lines the payload carried.
      *
-     * Counted, not decoded. History is a genuinely different format inside the same payload
-     * -- `9,h,<elapsed>,<events...>` -- and `-c` always includes it, so a capture reporting
-     * zero here is a capture that did not come from the production command. Decoding history
-     * is a later phase; counting it now keeps "we chose not to read this" separate from
-     * "the device did not send it".
+     * Counted, not decoded. The history block is a genuinely different format inside the same
+     * payload, and it has two line shapes: `9,h,<elapsed>,<events...>` for events and
+     * `9,hsp,<index>,<uid>,"<string>"` for the string pool they reference. Both are counted
+     * here, because they are one block serialised together.
+     *
+     * `-c` always includes them, so a capture reporting zero here did not come from the
+     * production command. Decoding history is a later phase; counting it now keeps "we chose
+     * not to read this" separate from "the device did not send it".
      */
     val historyLineCount: Int,
     /** Everything the decoder wanted to say about data it could not fully trust. */

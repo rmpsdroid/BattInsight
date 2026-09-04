@@ -15,7 +15,8 @@ each one.
 | | CHECKIN (`-c`) | PROTO (`--proto`) |
 |---|---|---|
 | Documented as machine-readable | yes, with a section-identifier table | no |
-| CTS coverage | yes, host-side test | not established |
+| CTS coverage | the format, via a host-side test | not established |
+| | *see [what CTS covers](#what-cts-actually-covers)* | |
 | Schema needed to read it | none | AOSP `.proto`, per version |
 | Licensing cost | none | vendoring Apache-2.0 schema into a GPL-3.0-only repo |
 | Payload size | 803–872 KB | 72–90 KB |
@@ -37,6 +38,19 @@ undiagnosable data loss benefits from evidence a human can read in a bug report,
 pull request, and check by eye against the device. Every test in this phase asserts against
 lines anyone can see.
 
+### What CTS actually covers
+
+Worth stating precisely, because the loose version of this claim is wrong. CTS's
+`BatteryStatsDumpsysTest` exercises `dumpsys batterystats --checkin`. That covers the
+**checkin format** — the aggregate record grammar this decoder parses — and it is what binds
+OEMs to keep that grammar well-formed.
+
+It does not cover the `-c` stream. `-c` returns the same aggregate records plus an interleaved
+history block, and that interleaving is not what the CTS test drives. Nothing external
+validates it; BattInsight's own real-capture tests do, by asserting exact history-block line
+counts on both measured platforms and pinning the two ways history was previously mistaken for
+aggregate records.
+
 **Plain text output stays rejected as a parser input.** It exposes no capability the
 structured formats lack, and costs 2.5–3.1 MB.
 
@@ -46,7 +60,8 @@ aggregate *and* history in one call.
 
 ## What is decoded
 
-Four record types out of the twenty-five Android 16 emits:
+Four record types. Android 16 emits **46 distinct aggregate record types**, so 42 are left
+undecoded and counted:
 
 | Tag | Meaning | Source of the layout |
 |---|---|---|
@@ -98,12 +113,26 @@ that expects the marker to lead reads the previous block's total as this block's
 produces plausible numbers from the wrong column — the worst kind of wrong, because nothing
 looks broken.
 
-**`-c` contains two formats.** History lines are `9,h,<elapsed>,<events…>`, where the field
-that holds a record tag in an aggregate line holds event data instead. They must be recognised
-before tag dispatch, and *before* any minimum-length check: `9,h,0:RESET:TIME:1788344548223`
-is only three fields. The first version of this decoder checked length first and both
-undercounted history and emitted thousands of spurious warnings — 2,746 on one capture, 7,080
-on another.
+**`-c` contains two formats, and the history block has two line shapes.** Aggregate records
+are `9,<uid>,<window>,<tag>,…`. The history block is `9,h,<elapsed>,<events…>` for events and
+`9,hsp,<index>,<uid>,"<string>"` for the string pool they reference. In both, the field that
+holds a record tag in an aggregate line holds something else entirely.
+
+Three separate defects came out of this one difference, each found by testing against the
+production format rather than the more convenient `--checkin`:
+
+1. Dispatching on field 3 without recognising `h` turned every event fragment (`+r`, `-w`,
+   `Bl=100`) into a fictional record type — 51,639 of them in one capture.
+2. Checking minimum length *before* the history check rejected three-field history lines such
+   as `9,h,0:RESET:TIME:1788344548223` as truncated records, undercounting history by 2,746
+   and 7,080 lines and emitting that many spurious warnings.
+3. Missing `hsp` did the same thing again, and worse: `hsp` puts a **UID** where an aggregate
+   record puts its tag, so every distinct UID in the string pool became a record type. The
+   reported count of undecoded record types was 124 against 42 real ones, and that wrong
+   number reached the diagnostic screen.
+
+The history markers are an explicit set, `{"h", "hsp"}`, because those are the only two
+non-numeric values field 1 takes across all four measured captures.
 
 ## Version gating
 

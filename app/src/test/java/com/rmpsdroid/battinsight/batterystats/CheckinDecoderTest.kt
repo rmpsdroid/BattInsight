@@ -451,6 +451,25 @@ class CheckinDecoderTest {
      * undercounting the history and flooding the warning list.
      */
     @Test
+    fun `a history string-pool line is history, not a record whose tag is a uid`() {
+        val capture = success(
+            decode(
+                VERS_A16,
+                "9,hsp,118,-1,\"DISCONNECTED\"",
+                "9,hsp,4,1001,\"android.safetycenter.action.REFRESH_SAFETY_SOURCES/u0\"",
+                KWL_ACTIVE,
+            ),
+        )
+
+        assertEquals(2, capture.historyLineCount)
+        assertTrue(
+            "a string-pool UID must never become a record type",
+            capture.unsupportedTags.isEmpty(),
+        )
+        assertEquals(1, capture.kernelWakelockCount)
+    }
+
+    @Test
     fun `a short history line is history, not a truncated record`() {
         val capture = success(decode(VERS_A16, "9,h,0:RESET:TIME:1788344548223", KWL_ACTIVE))
 
