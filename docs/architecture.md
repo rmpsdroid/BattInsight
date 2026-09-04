@@ -1,6 +1,7 @@
 # Architecture
 
-> Phase 2A. Contracts only. No layer below the capability boundary is implemented.
+> Phases 2A-4. The collection, capability and access-setup layers exist. Nothing below
+> the domain boundary is implemented.
 
 ## Layering
 
@@ -15,7 +16,8 @@ upgrade there once deleted every user's history.
 | **Domain** | Normalise raw output into stable value types | Not started |
 | **Session engine** | Snapshot identity, session boundaries, comparability, reconciliation | Not started. See `session-model.md` |
 | **Persistence** | Store snapshots durably with explicit schema versioning | Not started |
-| **Presentation** | Screens, chart models, reports | Capability Centre (Compose) |
+| **Access setup** | Turn a user's access choice into working access, and verify it | `AccessMode`, `SetupAction`, `SetupState`, `AccessSetupCoordinator` |
+| **Presentation** | Screens, chart models, reports | Capability Centre, onboarding and Manage access (Compose) |
 
 Packages exist only where they hold real code. Empty packages were not created to complete
 a diagram.
@@ -29,9 +31,25 @@ same version record, same 46 record tags, same 121 visible UIDs, same kernel wak
 - **Shizuku shell backend** — measured at uid 2000, `u:r:shell:s0`. Needs none of our
   privileged permissions, runs 2–4× faster, and resolves UID names the app UID cannot.
 
-Because their outputs are equivalent, one interface is honest rather than merely tidy.
-Neither is implemented yet; the boundary is fixed first so the session engine can be built
-and tested against a fake.
+Because their outputs are equivalent, one interface is honest rather than merely tidy. Both
+are implemented and validated on Android 16.
+
+## Why the access choice sits outside the capability layer
+
+`CapabilityCoordinator` answers *what is possible*. It does not decide *what should be
+used*, because that depends on a preference it has no business reading. A selector is
+injected instead, and the coordinator applies whatever it returns.
+
+That keeps three facts separate, which matters because conflating them is how an application
+starts quietly doing something the user did not ask for:
+
+- **preferred** — what the user chose;
+- **active** — what will really run, which may be nothing;
+- **fallbackOffer** — a working alternative deliberately *not* being used.
+
+The UI renders this rather than computing it. A screen that worked out its own answer could
+disagree with the one the collection layer acts on, and the user would be told something
+false.
 
 ## Rules the layering enforces
 
@@ -71,6 +89,12 @@ UI code cannot construct a command and nothing user-supplied reaches a process.
 Four commands exist, all read-only: `id`, `id -Z`, `dumpsys batterystats --proto`, and
 `dumpsys batterystats -c`. Adding one is a reviewable change to a single file, and tests
 assert that no state-changing argument can appear.
+
+A second, stricter whitelist governs the only operations that *change* state: `SetupAction`,
+six entries, `pm grant` and `pm revoke` for three permissions against BattInsight's own
+package name fixed at compile time. What crosses the Shizuku Binder is an identifier in both
+cases, never a command, and the remote service resolves it against its own copy of the
+whitelist before any process exists. See `security-privacy.md`.
 
 Execution enforces a timeout, honours cancellation, captures stdout and stderr separately,
 and records a nullable exit code — nullable because a process that never completed has no

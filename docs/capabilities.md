@@ -111,3 +111,34 @@ Usage access has **two valid routes** and either suffices: holding `PACKAGE_USAG
 or the `GET_USAGE_STATS` app-op being allowed. Requiring the app-op when the permission is
 granted would contradict measurement — after `pm grant` the app-op stayed at `DEFAULT` and
 the query still returned rows.
+
+---
+
+## Access mode is not capability
+
+The user's chosen access mode says what they *want*; the capability report says what is
+*true*. They are stored and computed separately and must never be conflated.
+
+```
+AccessMode.SHIZUKU_LIVE          does not mean  Shizuku is usable right now
+AccessMode.GRANTED_APP           does not mean  the three permissions are held
+```
+
+A stored preference survives reboots; Shizuku does not. Permissions can be revoked from
+Settings without telling the application. So readiness is always re-derived from a current
+capability report, and there is deliberately no persisted "setup complete" flag.
+
+`BackendSelection` joins the two and reports three separate facts — `preferred`, `active`
+and `fallbackOffer`. A privileged mode is never silently substituted for another, because
+the two modes differ in whether BattInsight itself ends up holding elevated permissions;
+that is the user's decision, so an available alternative is offered rather than applied.
+
+## Capabilities with no probe
+
+Six of the eleven capabilities have no probe yet. They report `Unknown` with the reason
+*"No probe implemented yet"* rather than being omitted from the report.
+
+Omitting them was a real defect, found in Phase 3.1: the initial report listed all eleven,
+evaluation returned five, and refreshing therefore made six capabilities disappear. A
+capability missing from the report reads as one that does not exist, which is a claim the
+application has not earned.

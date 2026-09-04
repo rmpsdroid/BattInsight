@@ -105,8 +105,29 @@ non-empty protobuf establishes only that *acquisition* works, never that every f
 populated.
 
 Checkin is used solely for kernel wakelocks, where the `kwl` records are greppable as text
-and reading them from protobuf would require the decoder that is deliberately deferred. The
-payload is scanned within a bounded prefix and then discarded.
+and reading them from protobuf would require the decoder that is deliberately deferred.
+
+The **whole** capture is scanned, not a prefix. An earlier 512 KB prefix reached the `kwl`
+block on no real device: measured against three captures it sits at 84-88% of the payload —
+672 KB into 803 KB on Android 16, 764 KB into 872 KB on Android 10. Scanning decodes one
+line at a time, so memory stays bounded and the payload is never held twice, and the capture
+is discarded afterwards.
+
+A capture cut short at the collection ceiling is marked truncated, and a negative reading
+from one is reported as *unknown* rather than as absence. The ceiling is ours, not the
+device's, and must never be reported as a property of the device.
 
 The retired sysfs sources — `/proc/wakelocks`, `/sys/kernel/debug/wakeup_sources`,
 `/sys/class/wakeup` — are **not** used and are not resurrected. Measurement retired them.
+
+---
+
+## Commands that change state
+
+Exactly six exist, all in `SetupAction`, all `pm grant` or `pm revoke` against BattInsight's
+own package for the three measured permissions. They are not part of acquisition and never
+run without an explicit user confirmation.
+
+No `appops` command exists anywhere in the application. Measurement showed the app-op does
+not need forcing: with `PACKAGE_USAGE_STATS` granted and `GET_USAGE_STATS` left at `DEFAULT`,
+`queryUsageStats` still returned 70 rows.
