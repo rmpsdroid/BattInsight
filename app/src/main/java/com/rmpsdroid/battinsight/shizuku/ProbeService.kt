@@ -2,6 +2,7 @@ package com.rmpsdroid.battinsight.shizuku
 
 import android.os.Bundle
 import com.rmpsdroid.battinsight.collection.ProbeCommand
+import com.rmpsdroid.battinsight.setup.SetupAction
 import java.io.InputStream
 import kotlin.system.exitProcess
 
@@ -26,6 +27,11 @@ import kotlin.system.exitProcess
  * refused without being executed. There is no command string parameter, no `sh -c`, and no
  * interpolation: the argument vector comes from [ProbeCommand] and nothing else.
  *
+ * [executeSetupAction] is the same shape but stricter, because it *changes* state. Its
+ * identifier resolves to a [SetupAction], whose argument vector names BattInsight's own
+ * package as a compile-time constant. There is no package parameter on the interface, so
+ * this service cannot be asked to alter another application's permissions.
+ *
  * This service must not use Android `Context` APIs. It runs standalone, not as a normal
  * application component.
  */
@@ -47,10 +53,35 @@ class ProbeService : IProbeService.Stub() {
                 System.currentTimeMillis() - started,
             )
 
+        return run(command.argv, started)
+    }
+
+    /**
+     * Performs one whitelisted setup action against BattInsight's own package.
+     *
+     * The resolution step is the boundary: an identifier that names no [SetupAction] is
+     * refused here, before a process exists. Because the argument vector is built by
+     * [SetupAction] from compile-time constants, a caller cannot influence which package is
+     * affected, which permission is named, or which `pm` subcommand runs.
+     */
+    override fun executeSetupAction(actionId: String?): Bundle {
+        val started = System.currentTimeMillis()
+
+        val action = SetupAction.forId(actionId)
+            ?: return rejected(
+                "unknown setup action id",
+                System.currentTimeMillis() - started,
+            )
+
+        return run(action.argv, started)
+    }
+
+    /** Runs a fixed argument vector that a whitelist produced. Never a caller's string. */
+    private fun run(argv: List<String>, started: Long): Bundle {
         var process: Process? = null
         return try {
-            // Fixed argument vector from the whitelist. No shell, no interpolation.
-            process = ProcessBuilder(command.argv).start()
+            // Fixed argument vector from a whitelist. No shell, no interpolation.
+            process = ProcessBuilder(argv).start()
             val stdoutCapture = process.inputStream.readBounded()
             val stderrCapture = process.errorStream.readBounded()
             val exit = process.waitFor()

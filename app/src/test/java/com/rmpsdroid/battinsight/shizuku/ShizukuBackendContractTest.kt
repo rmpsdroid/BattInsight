@@ -1,6 +1,7 @@
 package com.rmpsdroid.battinsight.shizuku
 
 import com.rmpsdroid.battinsight.collection.ProbeCommand
+import com.rmpsdroid.battinsight.setup.SetupAction
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -100,6 +101,128 @@ class ShizukuBackendContractTest {
                     )
                 }
             }
+        }
+    }
+
+    /**
+     * Nothing in the production source may execute something a caller composed.
+     *
+     * Phase 4 added the only state-changing path in the application, so this scan widened
+     * with it. The two `pm` operations are permitted because they are not free-form: their
+     * argument vectors are built by [SetupAction] from compile-time constants, which
+     * `SetupActionContractTest` verifies separately.
+     *
+     * String literals are matched with their surrounding quotes where the bare word would
+     * be ambiguous — `su` appears inside `suspend` on nearly every line of this codebase.
+     */
+    @Test
+    fun `production source contains no arbitrary execution surface`() {
+        val code = productionSources().joinToString("\n") { strippedOfComments(it.readText()) }
+        val q = '"'
+
+        // Note "-c" is deliberately absent: it is a legitimate argument of
+        // `dumpsys batterystats -c`, the checkin probe. What matters is a shell being
+        // invoked with it, which the "sh" literal and the "sh -c" substring both catch.
+        val quotedLiterals = listOf("sh", "su", "adb")
+        quotedLiterals.forEach { literal ->
+            val quoted = q + literal + q
+            assertTrue(
+                "production code must not contain the literal " + quoted,
+                !code.contains(quoted),
+            )
+        }
+
+        val substrings = listOf(
+            "sh -c",
+            "adb root",
+            "appops",
+            "settings put",
+            "pm install",
+            "pm uninstall",
+            "QUERY_ALL_PACKAGES",
+            "android.permission.INTERNET",
+            // The state-changing dumpsys arguments are deliberately absent from this list:
+            // they appear in ProbeCommand.forbiddenArguments, which is the deny-list that
+            // prevents them. `no whitelisted probe can mutate battery statistics state`
+            // asserts them against every argv, which is the check that actually matters.
+        )
+        substrings.forEach { forbidden ->
+            assertTrue(
+                "production code must not contain '" + forbidden + "'",
+                !code.contains(forbidden),
+            )
+        }
+    }
+
+    /**
+     * `BATTERY_STATS` must never be *requested*, which is not the same as never being
+     * *mentioned*.
+     *
+     * `RequiredPermission.NOT_REQUIRED_BATTERY_STATS` names it deliberately: Phase 1B
+     * measured acquisition succeeding with it denied, and both predecessor applications
+     * told users to grant it anyway, so the constant exists to stop it being reintroduced
+     * by assumption. A blunt text search would flag exactly the safeguard that prevents the
+     * mistake, so the assertion is about the places that would actually ask for it.
+     */
+    @Test
+    fun `BATTERY_STATS is never requested anywhere it would take effect`() {
+        val requestable =
+            ProbeCommand.all.flatMap { it.argv } + SetupAction.all.flatMap { it.argv } +
+                SetupAction.all.map { it.permission.manifestName } +
+                SetupAction.all.map { it.adbCommand }
+
+        assertTrue(
+            "no executable path may name BATTERY_STATS",
+            requestable.none { it.contains("BATTERY_STATS") },
+        )
+
+        val manifest = generateSequence(File("").absoluteFile) { it.parentFile }
+            .map { File(it, "app/src/main/AndroidManifest.xml") }
+            .firstOrNull { it.isFile }
+        assertNotNull("could not locate the manifest", manifest)
+        val declarations = manifest!!.readText()
+            .lineSequence()
+            .filter { it.contains("<uses-permission") || it.contains("android:name=") }
+            .filter { !it.trimStart().startsWith("<!--") }
+            .joinToString("\n")
+        assertTrue(
+            "BATTERY_STATS must not be declared in the manifest",
+            !declarations.contains("android.permission.BATTERY_STATS"),
+        )
+        assertTrue(
+            "INTERACT_ACROSS_USERS_FULL must appear only as the provider guard",
+            declarations.lineSequence()
+                .filter { it.contains("INTERACT_ACROSS_USERS_FULL") }
+                .all { it.contains("android:permission=") },
+        )
+    }
+
+    @Test
+    fun `only whitelisted argument vectors are executable`() {
+        // Every argv element in the application comes from one of exactly two whitelists.
+        val fromWhitelists =
+            (ProbeCommand.all.flatMap { it.argv } + SetupAction.all.flatMap { it.argv }).toSet()
+
+        assertTrue("the probe whitelist must not be empty", ProbeCommand.all.isNotEmpty())
+        assertTrue("the setup whitelist must not be empty", SetupAction.all.isNotEmpty())
+        assertTrue(
+            "pm is the only absolute executable path any whitelist may name",
+            fromWhitelists.filter { it.startsWith("/") }.all { it == SetupAction.PM_PATH },
+        )
+        assertTrue(
+            "no whitelisted argument may name a shell",
+            fromWhitelists.none { it == "sh" || it == "su" || it.endsWith("/sh") },
+        )
+    }
+
+    @Test
+    fun `setup actions target only BattInsight's own package`() {
+        SetupAction.all.forEach {
+            assertEquals(
+                it.id + " must target BattInsight and nothing else",
+                SetupAction.TARGET_PACKAGE,
+                it.argv[2],
+            )
         }
     }
 

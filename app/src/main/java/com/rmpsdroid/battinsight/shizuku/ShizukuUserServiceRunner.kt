@@ -7,6 +7,9 @@ import android.os.IBinder
 import com.rmpsdroid.battinsight.collection.ExecutionOutput
 import com.rmpsdroid.battinsight.collection.ProbeCommand
 import com.rmpsdroid.battinsight.collection.ProcessRunner
+import com.rmpsdroid.battinsight.setup.SetupAction
+import com.rmpsdroid.battinsight.setup.SetupExecutor
+import com.rmpsdroid.battinsight.setup.SetupOutcome
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
@@ -49,7 +52,7 @@ import kotlin.coroutines.resume
 class ShizukuUserServiceRunner(
     context: Context,
     private val gateway: ShizukuGateway,
-) : ProcessRunner {
+) : ProcessRunner, SetupExecutor {
 
     private val appContext = context.applicationContext
 
@@ -135,6 +138,69 @@ class ShizukuUserServiceRunner(
                 failure(command, "remote execution failed: " + describe(t), started)
             }
         }
+
+    /**
+     * Performs one typed setup action with shell identity.
+     *
+     * Shares the binding with [run], so a grant sequence does not rebind between steps. The
+     * action identifier is all that crosses the Binder; the remote side rebuilds the
+     * argument vector from its own copy of the whitelist.
+     */
+    override suspend fun execute(action: SetupAction): SetupOutcome = withContext(Dispatchers.IO) {
+        val started = System.currentTimeMillis()
+
+        if (!gateway.state().isUsable) {
+            return@withContext SetupOutcome.Unavailable("Shizuku is not authorised")
+        }
+
+        val remote = try {
+            withTimeout(BIND_TIMEOUT_MS) { obtainService() }
+        } catch (t: TimeoutCancellationException) {
+            return@withContext SetupOutcome.Unavailable("user service bind timed out")
+        } catch (t: Throwable) {
+            if (t is kotlinx.coroutines.CancellationException) throw t
+            return@withContext SetupOutcome.Unavailable("user service bind failed: " + describe(t))
+        } ?: return@withContext SetupOutcome.Unavailable(
+            "user service unavailable" + (lastBindError?.let { " (" + it + ")" } ?: ""),
+        )
+
+        try {
+            withTimeout(SETUP_TIMEOUT_MS) {
+                val bundle = remote.executeSetupAction(action.id)
+                    ?: return@withTimeout SetupOutcome.Refused("no result from user service")
+
+                bundle.getString(ProbeService.KEY_REJECTION)?.let { reason ->
+                    return@withTimeout SetupOutcome.Refused(reason)
+                }
+
+                val hasExit = bundle.getBoolean(ProbeService.KEY_HAS_EXIT, false)
+                val stderr = bundle.getByteArray(ProbeService.KEY_STDERR) ?: ByteArray(0)
+                val stdout = bundle.getByteArray(ProbeService.KEY_STDOUT) ?: ByteArray(0)
+                // pm reports failures on either stream; both are short, so both are kept.
+                val message = (decode(stderr) + " " + decode(stdout)).trim()
+                SetupOutcome.Executed(
+                    exitCode = if (hasExit) bundle.getInt(ProbeService.KEY_EXIT) else null,
+                    message = message,
+                    durationMillis = bundle.getLong(
+                        ProbeService.KEY_DURATION,
+                        System.currentTimeMillis() - started,
+                    ),
+                )
+            }
+        } catch (t: TimeoutCancellationException) {
+            SetupOutcome.Unavailable("setup action timed out")
+        } catch (t: android.os.DeadObjectException) {
+            discard()
+            SetupOutcome.Unavailable("user service died")
+        } catch (t: Throwable) {
+            if (t is kotlinx.coroutines.CancellationException) throw t
+            SetupOutcome.Unavailable("remote execution failed: " + describe(t))
+        }
+    }
+
+    /** `pm` output is short and diagnostic; bounded anyway so nothing large is ever held. */
+    private fun decode(bytes: ByteArray): String =
+        String(bytes, 0, minOf(bytes.size, MESSAGE_LIMIT), Charsets.UTF_8).trim()
 
     /**
      * Returns a live service, binding if necessary. Serialised so concurrent probes share
@@ -264,6 +330,9 @@ class ShizukuUserServiceRunner(
         /** Bumped when the remote contract changes, so Shizuku restarts an old process. */
         const val SERVICE_VERSION = 1
         const val BIND_TIMEOUT_MS = 15_000L
+
+        /** `pm grant` is fast; a long wait here would only mask a stuck service. */
+        const val SETUP_TIMEOUT_MS = 20_000L
 
         /** A disconnect that arrived before the new binding was ever used. */
         const val TEARDOWN_RACE = "disconnected before first use"
