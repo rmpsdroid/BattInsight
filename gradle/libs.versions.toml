@@ -34,7 +34,15 @@ composeBom = "2026.08.00"
 activityCompose = "1.13.0"
 lifecycleCompose = "2.11.0"
 coroutinesTest = "1.11.0"
-composeCompiler = "2.4.10"
+# MUST equal the Kotlin version AGP's built-in Kotlin uses -- AGP 9.4.0 bundles KGP 2.2.10.
+# The Compose compiler ships inside the Kotlin repository and is released in lockstep with it,
+# so "compatible" here means "the same version", not "new enough".
+#
+# This was 2.4.10, two Kotlin minor lines ahead of the compiler it actually ran against, and
+# it broke the release variant: the 2.3+ plugin asks for
+# org.jetbrains.kotlin:compose-group-mapping:<kotlinVersion>, which for 2.2.10 was never
+# published (the artifact first appears at 2.3.0-Beta1). assembleRelease could not resolve it.
+composeCompiler = "2.2.10"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
