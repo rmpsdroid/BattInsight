@@ -1,7 +1,7 @@
 # Architecture
 
-> Phases 2A-4. The collection, capability and access-setup layers exist. Nothing below
-> the domain boundary is implemented.
+> Phases 2A-5. Collection, capability, access setup and the session engine exist.
+> Persistence and decoding do not.
 
 ## Layering
 
@@ -13,8 +13,8 @@ upgrade there once deleted every user's history.
 |---|---|---|
 | **Collection** | Obtain raw bytes and report execution mechanics. No interpretation, no policy | `PrivilegeBackend`, `BackendIdentity`, `SourceFormat`, `CollectionResult`, `CollectionOutcome` — contracts only |
 | **Capability** | Decide what an outcome *means* for a given source | `Capability`, `CapabilityState`, `SourceReading`, `CapabilityInterpreter` |
-| **Domain** | Normalise raw output into stable value types | Not started |
-| **Session engine** | Snapshot identity, session boundaries, comparability, reconciliation | Not started. See `session-model.md` |
+| **Domain** | Normalise raw output into stable value types | `BatteryObservation` only; batterystats normalisation is not started |
+| **Session engine** | Snapshot identity, session boundaries, comparability, reconciliation | `SessionEngine`, `BatterySession`, `BatterySnapshot`, `SnapshotComparability`. Pure Kotlin. See `session-model.md` |
 | **Persistence** | Store snapshots durably with explicit schema versioning | Not started |
 | **Access setup** | Turn a user's access choice into working access, and verify it | `AccessMode`, `SetupAction`, `SetupState`, `AccessSetupCoordinator` |
 | **Presentation** | Screens, chart models, reports | Capability Centre, onboarding and Manage access (Compose) |
@@ -100,3 +100,32 @@ Execution enforces a timeout, honours cancellation, captures stdout and stderr s
 and records a nullable exit code — nullable because a process that never completed has no
 exit status, and conflating that with "exited 0" is the mistake the whole architecture
 exists to avoid. Captured output is bounded; payloads are never logged.
+
+---
+
+## Why the session engine is pure
+
+`SessionEngine` has no Android import, no clock, no I/O and no randomness beyond an
+identifier factory it is handed. Everything platform-shaped lives in `AndroidBatterySource`,
+which maps intent extras to `BatteryObservation` and holds no session logic at all.
+
+That split is what makes roughly eighty lifecycle scenarios — reboots, process death,
+stale broadcasts, wall-clock jumps, contradictory battery states — run on the JVM in
+milliseconds. Each is a function of its arguments, so a failure names one cause rather than
+a race.
+
+`SessionCoordinator` sequences observations and publishes state. It owns no decisions.
+
+## What the session engine must never depend on
+
+It holds no reference to the capability or access layers, which is the strongest form that
+guarantee can take. A battery interval is a fact about the device; it cannot move because
+the user changed access method or a permission was revoked.
+
+The dependency runs one way only: nothing in `session/` imports from `capability/`,
+`setup/` or `access/`.
+
+It imports exactly one thing from `collection/` — `SourceFormat`, a three-value enum naming
+the acquisition formats — so `CounterSource` can describe which of them produced a snapshot's
+counters. That is a value type, not behaviour; duplicating the enum to claim zero imports
+would be worse than the coupling it removes.

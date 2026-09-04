@@ -131,3 +131,37 @@ run without an explicit user confirmation.
 No `appops` command exists anywhere in the application. Measurement showed the app-op does
 not need forcing: with `PACKAGE_USAGE_STATS` granted and `GET_USAGE_STATS` left at `DEFAULT`,
 `queryUsageStats` still returned 70 rows.
+
+---
+
+## Battery state, as distinct from battery statistics
+
+Two different sources, answering two different questions, and the session engine uses only
+the first.
+
+| | Source | Needs privileged access | Used for |
+|---|---|---|---|
+| Battery **state** | `ACTION_BATTERY_CHANGED` (sticky), `ACTION_POWER_CONNECTED`/`DISCONNECTED`, `BatteryManager` | No | Session boundaries, level, temperature, voltage |
+| Battery **statistics** | `dumpsys batterystats` | Yes | Counters, wakelocks, attribution — not yet decoded |
+
+Battery state is available to any application without permission. That is why the session
+engine works in limited mode, with no access set up at all: knowing when the device was
+unplugged does not require reading `BatteryStatsService`.
+
+`ACTION_BATTERY_CHANGED` is sticky, so current state can be read with a null receiver
+without registering anything. Measured on Android 16, the extras present were:
+
+```
+status, plugged, present, level, scale, health, technology, temperature, voltage,
+charge_counter, seq, icon-small, invalid_charger, battery_low,
+max_charging_current, max_charging_voltage,
+android.os.extra.CAPACITY_LEVEL, android.os.extra.CHARGING_STATUS,
+android.os.extra.CYCLE_COUNT
+```
+
+`EXTRA_PLUGGED` is authoritative for whether external power is attached, and `EXTRA_STATUS`
+fills the gap only when the plug is unknown. Zero means nothing is attached — a measured
+answer — while a missing extra means no answer at all, and the two map to different values.
+
+**Nothing here mutates battery state.** `dumpsys battery set`, `dumpsys battery unplug` and
+`cmd battery` are not used anywhere, in production or in tests.

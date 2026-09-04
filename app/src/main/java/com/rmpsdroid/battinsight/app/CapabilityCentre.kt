@@ -32,6 +32,7 @@ import com.rmpsdroid.battinsight.capability.CapabilityReport
 import com.rmpsdroid.battinsight.capability.CapabilityState
 import com.rmpsdroid.battinsight.collection.BackendStatus
 import com.rmpsdroid.battinsight.permissions.PermissionStatus
+import com.rmpsdroid.battinsight.session.SessionStatus
 
 /**
  * A developer-facing view of what BattInsight can currently do.
@@ -53,6 +54,7 @@ import com.rmpsdroid.battinsight.permissions.PermissionStatus
 fun CapabilityCentreScreen(
     report: CapabilityReport,
     mode: AccessMode,
+    sessionStatus: SessionStatus,
     onRefresh: () -> Unit,
     onManageAccess: () -> Unit,
     modifier: Modifier = Modifier,
@@ -88,7 +90,13 @@ fun CapabilityCentreScreen(
             modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            item { SectionHeader("Access") }
+            item { SectionHeader("Battery session") }
+            item { SessionStatusSection(sessionStatus) }
+
+            item {
+                Spacer(Modifier.height(8.dp))
+                SectionHeader("Access")
+            }
             item {
                 PlainRow(
                     title = "Access method",
