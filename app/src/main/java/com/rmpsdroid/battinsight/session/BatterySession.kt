@@ -74,18 +74,50 @@ enum class SessionType {
     }
 }
 
-/** Why a session ended. */
+/**
+ * Why a session ended.
+ *
+ * Four distinct statements, deliberately not collapsed. Each says something different about
+ * what BattInsight actually knows, and a user shown "the device restarted" deserves that to
+ * be true rather than a stand-in for "something happened and we are not sure what".
+ */
 enum class SessionBoundaryReason {
-    /** A power transition was observed. */
+    /** A power transition was observed directly. */
     POWER_TRANSITION,
 
-    /** A different boot was detected, so the monotonic interval cannot continue. */
+    /**
+     * A different boot was **proven**, so the monotonic interval cannot continue.
+     *
+     * Requires a kernel boot identifier. Nothing weaker may produce this.
+     */
     BOOT_BOUNDARY,
 
-    /** The transition was inferred at cold start, not observed. */
+    /**
+     * A real change was reconstructed at cold start rather than witnessed.
+     *
+     * The boot is *known* to be the same, and the device is *known* to have changed
+     * direction while the process did not exist. What is missing is only the broadcast, so
+     * the transition is real and its moment is approximate.
+     */
     RECOVERY,
 
-    /** Saved state could not be trusted. */
+    /**
+     * Continuity could not be established either way.
+     *
+     * Distinct from [RECOVERY]: nothing here is known to have changed, and nothing is known
+     * to be wrong. Without a kernel boot identifier the saved interval cannot be tied to the
+     * current one, so it is not carried forward -- but no reboot is claimed, because none
+     * was proven.
+     */
+    UNPROVEN_CONTINUITY,
+
+    /**
+     * Saved state contradicts the present and provably cannot continue.
+     *
+     * The case that reaches this is monotonic time having gone backwards. That disproves the
+     * saved timeline, but it does not prove a reboot on its own: stale or corrupt saved state
+     * produces the same reading, and only a kernel identifier could tell the two apart.
+     */
     INCONSISTENT_STATE,
 
     /** Still running. */

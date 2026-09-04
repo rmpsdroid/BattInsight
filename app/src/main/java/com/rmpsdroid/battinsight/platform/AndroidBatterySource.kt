@@ -236,10 +236,10 @@ class AndroidBatterySource(
  *
  * Whether an ordinary application can read it is a platform question, not an assumption:
  * `proc` is subject to SELinux and the answer varies. It is measured at runtime, and when
- * the read fails the source degrades to [BootIdentity.Derived], which can establish that
- * two observations came from *different* boots but never that they came from the same one.
- * That is a real loss of capability and the comparability layer refuses accordingly, rather
- * than proceeding on a guess.
+ * the read fails the source degrades to [BootIdentity.Derived], which establishes **nothing**
+ * about boot identity in either direction -- the wall clock it is built from moves
+ * independently of any reboot. That is a real loss of capability, and the comparability layer
+ * refuses accordingly rather than proceeding on a guess.
  *
  * The value is read once and cached: it cannot change without a reboot, and a reboot ends
  * this process.
@@ -261,8 +261,9 @@ class AndroidBootIdentitySource : BootIdentitySource {
 
         if (fromKernel != null) return BootIdentity.Kernel(fromKernel)
 
-        // Fallback: approximately when this boot began, on the wall clock. Weak by
-        // construction, and typed so nothing downstream can mistake it for proof.
+        // Fallback: approximately when this boot began, on the wall clock. It proves
+        // nothing -- a clock correction moves it without any reboot -- and is typed so
+        // nothing downstream can mistake it for evidence. Carried for diagnostics only.
         val elapsed = SystemClock.elapsedRealtime()
         return BootIdentity.Derived(System.currentTimeMillis() - elapsed)
     }

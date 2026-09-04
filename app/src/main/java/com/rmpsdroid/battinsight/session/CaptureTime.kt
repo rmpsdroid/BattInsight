@@ -53,10 +53,13 @@ data class CaptureTime(
     /**
      * Approximately when this boot began, on the wall clock.
      *
-     * Deliberately named *approximate*: it is a subtraction of two clocks that drift
-     * relative to each other, so it is a weak signal. It is never used to claim two
-     * observations share a boot — only, with a generous tolerance, to establish that they
-     * cannot. See [BootIdentity.Derived].
+     * Deliberately named *approximate*, and non-authoritative by construction: the wall
+     * clock it is built from may be changed by the user or the network at any time, so this
+     * value moves without any reboot having happened.
+     *
+     * It therefore establishes **nothing** about boot identity, in either direction. It
+     * exists for diagnostics and exports, where an approximate boot time helps a human read
+     * a timeline. See [BootIdentity.Derived], which carries the same caveat.
      */
     val approximateBootWallClockMillis: Long
         get() = wallClockMillis - elapsedRealtime.millis

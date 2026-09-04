@@ -87,16 +87,41 @@ they are known to share one. `BootIdentity` answers in three ways, not two:
 | Variant | Source | Can prove SAME | Can prove DIFFERENT |
 |---|---|---|---|
 | `Kernel` | `/proc/sys/kernel/random/boot_id` | yes | yes |
-| `Derived` | wall clock − elapsed realtime | **no** | yes, beyond a 10-minute tolerance |
+| `Derived` | wall clock − elapsed realtime | **no** | **no** |
 | `Unknown` | nothing available | no | no |
+
+Only the kernel identifier decides anything. Every other combination is `UNKNOWN`.
 
 **Measured on Android 16:** `boot_id` is readable by an ordinary application
 (`exists=true canRead=true`, 36 bytes), so the strong variant is what runs in practice. The
 fallback exists because that is a platform behaviour, not a guarantee.
 
-The asymmetry is deliberate. A derived identity that claimed sameness would be inventing
-certainty the data does not contain, and every counter delta downstream would inherit the
-invention.
+### Why the fallback proves nothing in either direction
+
+An earlier version treated a large change in the *estimated* boot time as proof of a reboot.
+That was unsound and was corrected in Phase 5.1.
+
+`System.currentTimeMillis` may be changed by the user or the network and may jump either way
+at any moment; `SystemClock.elapsedRealtime` continues undisturbed. So on one uninterrupted
+boot a six-hour clock correction moves `wallClock − elapsedRealtime` by six hours. Reading
+that as a reboot would split a real session and label the break *device restarted* — a
+confident false statement, which is worse than an honest "cannot tell".
+
+The estimate is retained as diagnostic metadata for exports, where an approximate boot time
+helps a human read a timeline. It may not decide anything.
+
+### Android clock semantics, precisely
+
+| | Advances during deep sleep | Affected by clock changes | Resets on reboot |
+|---|---|---|---|
+| `SystemClock.elapsedRealtime()` | **yes** | no | yes |
+| `SystemClock.uptimeMillis()` | no | no | yes |
+| `System.currentTimeMillis()` | yes | **yes** | no |
+
+`elapsedRealtime` is the engine's monotonic source precisely because it includes deep sleep:
+a device asleep on battery for six hours has still been discharging for six hours.
+`uptimeMillis` would under-report exactly the intervals a battery tool exists to measure, and
+is not used anywhere.
 
 ## What owns a session boundary
 
@@ -138,18 +163,43 @@ measured on no longer exists.
 ## Cold-start reconciliation
 
 The application cannot observe anything while its process does not exist, so this is where
-correctness after process death actually comes from. `reconcile` distinguishes four cases:
+correctness after process death actually comes from.
 
-1. **Nothing saved** → start.
-2. **Same boot, same direction** → continue, same session identity.
-3. **Same boot, different direction** → boundary, `SessionBoundaryReason.RECOVERY`, trigger
-   `SessionTrigger.RECOVERY`. No broadcast was seen, and labelling it `POWER_DISCONNECTED`
-   would be claiming one was.
-4. **Different boot** → boot boundary.
+| Situation | Result |
+|---|---|
+| Nothing saved | start |
+| Same boot (**proven**), same direction | continue, same session identity |
+| Same boot (**proven**), different direction | boundary, `RECOVERY`, trigger `RECOVERY` |
+| Different boot (**proven**) | boundary, `BOOT_BOUNDARY`, trigger `BOOT_CHANGED` |
+| Boot unprovable, time progressing | boundary, `UNPROVEN_CONTINUITY`, trigger `RECOVERY` |
+| Boot unprovable, time went backwards | boundary, `INCONSISTENT_STATE`, trigger `RECOVERY` |
+| Saved time later than present, **proven** same boot | rejected, `INCONSISTENT_STATE` |
 
-Plus two refusals: saved state claiming a later monotonic time than the present is
-`INCONSISTENT_STATE`, and an unprovable boot relation starts fresh rather than adopting an
-old interval onto a clock that may not be the same clock.
+Row three matters most in normal use. No broadcast was seen, so labelling it
+`POWER_DISCONNECTED` would be claiming one was.
+
+### Four boundary reasons, four different claims
+
+Phase 5.1 separated these, because they were previously saying more than was known.
+
+| Reason | What BattInsight actually knows |
+|---|---|
+| `POWER_TRANSITION` | A transition was **observed** |
+| `BOOT_BOUNDARY` | A reboot is **proven** — requires a kernel boot identifier |
+| `RECOVERY` | Same boot proven, and the device is **known** to have changed while the process was gone. Only the broadcast is missing |
+| `UNPROVEN_CONTINUITY` | **Nothing** is known to have changed, and nothing is known to be wrong. Continuity simply cannot be established |
+| `INCONSISTENT_STATE` | The saved timeline is **disproven** — monotonic time went backwards |
+
+The last two both start a fresh interval and **neither claims a reboot**. Monotonic time
+going backwards disproves the saved timeline but does not, on its own, prove a restart:
+stale or corrupt saved state produces the same reading, and only a kernel identifier could
+tell the two apart. Saying "the device restarted" there would invent the one fact this model
+is most careful never to invent.
+
+The practical consequence of the fallback proving nothing is worth stating plainly: on a
+device where `boot_id` is unreadable, every cold start begins a fresh interval. That is a
+real loss of function, and it is the correct one — the alternative is claiming a continuity,
+or a reboot, that was never established.
 
 `SessionTrigger.isObserved` exists so the distinction between witnessed and inferred is
 queryable, and the UI says *"Change detected at start-up (not observed directly)"* rather
@@ -158,8 +208,13 @@ than presenting an inference as an observation.
 ## Counter generation
 
 `CounterGeneration` exists because Android's counters can reset independently of anything
-BattInsight decides — a reboot does it, and so does `dumpsys batterystats --reset`, which
-other software invokes.
+BattInsight decides — `dumpsys batterystats --reset` does it, and other software invokes
+that.
+
+A **proven** boot boundary also advances the generation. That is a comparability policy of
+ours rather than a claim about the platform: with no counter reset detector yet, BattInsight
+declines to subtract across a boundary it cannot reason about, instead of asserting that
+every counter physically restarts at every reboot.
 
 It moves independently of the session, in both directions:
 

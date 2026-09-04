@@ -208,12 +208,27 @@ class SessionEngine(
 
         if (relation == BootRelation.UNKNOWN) {
             // Continuity cannot be established, so it is not claimed. A fresh interval
-            // starts rather than an old one being silently adopted onto a clock that may
-            // not be the same clock.
-            val ended = prior.copy(
-                end = prior.latest,
-                endReason = SessionBoundaryReason.INCONSISTENT_STATE,
-            )
+            // starts rather than an old one being adopted onto a clock that may not be the
+            // same clock.
+            //
+            // Two situations arrive here and they are reported differently, because they
+            // say different things. Monotonic time going backwards *disproves* the saved
+            // timeline -- though not, on its own, that a reboot happened, since stale or
+            // corrupt saved state produces the same reading. Time progressing normally
+            // proves nothing either way: continuity simply cannot be established.
+            //
+            // Neither is RECOVERY, which is reserved for a change that is genuinely known
+            // to have happened on a *proven* same boot. And neither is a boot change:
+            // without a kernel identifier nothing here has proven a reboot, and saying so
+            // would invent the one fact this model is most careful never to invent.
+            val monotonicBroken =
+                observation.time.elapsedRealtime < prior.latest.time.elapsedRealtime
+            val reason = if (monotonicBroken) {
+                SessionBoundaryReason.INCONSISTENT_STATE
+            } else {
+                SessionBoundaryReason.UNPROVEN_CONTINUITY
+            }
+            val ended = prior.copy(end = prior.latest, endReason = reason)
             val started = openSession(
                 base.counterGeneration,
                 observation,
@@ -221,12 +236,7 @@ class SessionEngine(
             )
             return SessionTransition(
                 base.copy(session = started, lastAccepted = started.start),
-                TransitionResult.Boundary(
-                    ended,
-                    started,
-                    SessionBoundaryReason.INCONSISTENT_STATE,
-                    SessionTrigger.RECOVERY,
-                ),
+                TransitionResult.Boundary(ended, started, reason, SessionTrigger.RECOVERY),
             )
         }
 
@@ -289,12 +299,25 @@ class SessionEngine(
 
     // ------------------------------------------------------------------------- internals
 
+    /**
+     * Refuses an observation that would move monotonic time backwards.
+     *
+     * Applies unless the identities *prove* different boots, rather than only when they
+     * prove the same one. Within [accept] the observations come from a live process, and a
+     * process cannot survive a reboot -- so consecutive observations are from one boot
+     * whatever the identity is strong enough to say. Gating on a proven SAME would disable
+     * this check entirely whenever the kernel identifier is unavailable, which is precisely
+     * when the engine can least afford to be rewound by a stale broadcast.
+     */
     private fun checkOrdering(
         state: SessionEngineState,
         observation: BatteryObservation,
     ): TransitionResult? {
         val last = state.lastAccepted ?: return null
-        if (last.bootIdentity.relationTo(observation.bootIdentity) != BootRelation.SAME) return null
+        if (last.bootIdentity.relationTo(observation.bootIdentity) == BootRelation.DIFFERENT) {
+            // A proven boot change restarts the clock; that is not a rewind.
+            return null
+        }
         if (observation.time.elapsedRealtime >= last.time.elapsedRealtime) return null
 
         // Within one boot the monotonic clock cannot go backwards, so this observation is
@@ -327,7 +350,13 @@ class SessionEngine(
             end = state.session.latest,
             endReason = SessionBoundaryReason.BOOT_BOUNDARY,
         )
-        // A new boot always restarts platform counters, so the generation moves with it.
+        // A proven boot boundary is treated as a counter-comparability boundary, so the
+        // generation advances and no future raw subtraction can cross it.
+        //
+        // That is a policy of ours, not a claim about Android. BattInsight has no counter
+        // reset detector yet -- that needs the decoder -- so it does not assert that every
+        // counter physically restarts at every reboot. It declines to rely on the question
+        // either way, which costs nothing and cannot be wrong.
         val generation = state.counterGeneration.next()
         val started = openSession(generation, observation, SessionTrigger.BOOT_CHANGED)
         val next = state.copy(

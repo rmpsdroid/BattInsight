@@ -571,6 +571,13 @@ class SessionEngineTest {
     fun `an unprovable boot relation starts a fresh interval rather than assuming continuity`() {
         // Derived identities cannot prove sameness. Adopting the old interval onto a clock
         // that might not be the same clock would invent continuity that was never measured.
+        //
+        // The reason is RECOVERY rather than INCONSISTENT_STATE: monotonic time progressed
+        // normally, so nothing here is contradictory -- continuity simply could not be
+        // established. That is UNPROVEN_CONTINUITY, which is a weaker and more honest claim
+        // than either of its neighbours: INCONSISTENT_STATE means the saved timeline is
+        // provably broken, and RECOVERY means a real change is known to have happened on a
+        // proven same boot. Neither is true here.
         val e = engine()
         val saved = e.reconcile(
             null,
@@ -584,13 +591,34 @@ class SessionEngineTest {
         )
 
         val boundary = after.result as TransitionResult.Boundary
-        assertEquals(SessionBoundaryReason.INCONSISTENT_STATE, boundary.reason)
+        assertEquals(SessionBoundaryReason.UNPROVEN_CONTINUITY, boundary.reason)
         assertEquals(SessionTrigger.RECOVERY, boundary.trigger)
-        assertNotEquals(oldId, after.state.session!!.id)
+        assertNotEquals(
+            "a fresh interval, because continuity was never proven",
+            oldId,
+            after.state.session!!.id,
+        )
+        assertNotEquals(
+            "and never labelled a reboot, which nothing here proved",
+            SessionBoundaryReason.BOOT_BOUNDARY,
+            boundary.reason,
+        )
     }
 
+    /**
+     * Replaces a test that asserted the defect.
+     *
+     * It previously required a derived estimate a day apart to produce a `BOOT_BOUNDARY`.
+     * That is unsound: a clock correction moves the estimate without any reboot, and the
+     * result was a session split labelled *device restarted* that never happened.
+     *
+     * Without a kernel identifier nothing here proves a reboot, so the boundary is reported
+     * for what it is -- state that could not be carried forward -- and never as a boot
+     * change. The monotonic reading going backwards is what makes this case
+     * `INCONSISTENT_STATE` rather than `RECOVERY`.
+     */
     @Test
-    fun `a derived identity far enough apart proves a different boot`() {
+    fun `a derived identity never produces a boot boundary, however far apart`() {
         val e = engine()
         val saved = e.reconcile(null, discharging(HOUR, boot = BootIdentity.Derived(EPOCH))).state
 
@@ -599,10 +627,108 @@ class SessionEngineTest {
             discharging(60_000, boot = BootIdentity.Derived(EPOCH + 24 * HOUR)),
         )
 
-        assertEquals(
+        val boundary = after.result as TransitionResult.Boundary
+        assertNotEquals(
+            "a reboot must never be claimed without proof",
             SessionBoundaryReason.BOOT_BOUNDARY,
-            (after.result as TransitionResult.Boundary).reason,
+            boundary.reason,
         )
+        assertNotEquals(SessionTrigger.BOOT_CHANGED, boundary.trigger)
+        assertEquals(SessionBoundaryReason.INCONSISTENT_STATE, boundary.reason)
+        assertEquals(SessionTrigger.RECOVERY, boundary.trigger)
+    }
+
+    /**
+     * Kernel identifier unavailable and monotonic time progressing normally.
+     *
+     * Nothing is known to have changed and nothing is known to be wrong, so the boundary
+     * says exactly that. It is not RECOVERY -- that would assert a real change was
+     * reconstructed -- and it is not INCONSISTENT_STATE, because nothing contradicts
+     * anything.
+     */
+    @Test
+    fun `an unprovable boot with time progressing normally reports unproven continuity`() {
+        val e = engine()
+        val saved = e.reconcile(null, discharging(HOUR, boot = BootIdentity.Derived(EPOCH))).state
+
+        val after = e.reconcile(
+            saved,
+            discharging(HOUR + 30 * MINUTE, boot = BootIdentity.Derived(EPOCH)),
+        )
+
+        val boundary = after.result as TransitionResult.Boundary
+        assertEquals(SessionBoundaryReason.UNPROVEN_CONTINUITY, boundary.reason)
+        assertEquals(SessionTrigger.RECOVERY, boundary.trigger)
+        assertNotEquals(SessionBoundaryReason.BOOT_BOUNDARY, boundary.reason)
+        assertNotEquals(SessionBoundaryReason.INCONSISTENT_STATE, boundary.reason)
+    }
+
+    /**
+     * The three cold-start boundaries are distinguishable from one another.
+     *
+     * They are different claims about what BattInsight knows, and collapsing any two would
+     * put a sentence on screen that is not true.
+     */
+    @Test
+    fun `the cold-start boundary reasons say three different things`() {
+        val e = engine()
+
+        // Proven same boot, direction genuinely changed while the process was gone.
+        val known = e.reconcile(
+            e.reconcile(null, discharging(0, boot = kernelBoot("k"))).state,
+            charging(HOUR, boot = kernelBoot("k"), trigger = SessionTrigger.APP_START),
+        ).result as TransitionResult.Boundary
+
+        // No kernel identifier, time fine: nothing known either way.
+        val unproven = e.reconcile(
+            e.reconcile(null, discharging(0, boot = BootIdentity.Derived(EPOCH))).state,
+            discharging(HOUR, boot = BootIdentity.Derived(EPOCH)),
+        ).result as TransitionResult.Boundary
+
+        // No kernel identifier, time went backwards: the saved timeline is disproven.
+        val broken = e.reconcile(
+            e.reconcile(null, discharging(2 * HOUR, boot = BootIdentity.Derived(EPOCH))).state,
+            discharging(MINUTE, boot = BootIdentity.Derived(EPOCH)),
+        ).result as TransitionResult.Boundary
+
+        assertEquals(SessionBoundaryReason.RECOVERY, known.reason)
+        assertEquals(SessionBoundaryReason.UNPROVEN_CONTINUITY, unproven.reason)
+        assertEquals(SessionBoundaryReason.INCONSISTENT_STATE, broken.reason)
+        assertEquals(
+            "all three are distinct",
+            3,
+            setOf(known.reason, unproven.reason, broken.reason).size,
+        )
+        listOf(known, unproven, broken).forEach {
+            assertNotEquals(
+                "none of them may claim a reboot",
+                SessionBoundaryReason.BOOT_BOUNDARY,
+                it.reason,
+            )
+            assertNotEquals(SessionTrigger.BOOT_CHANGED, it.trigger)
+        }
+    }
+
+    /**
+     * A stale broadcast must still be refused when the identifier is unavailable.
+     *
+     * A live process cannot span a reboot, so consecutive observations share a boot whatever
+     * the identity can prove. Gating the ordering check on a *proven* same boot would have
+     * disabled it exactly when the engine can least afford to be rewound.
+     */
+    @Test
+    fun `an out-of-order observation is rejected even without a kernel identity`() {
+        val e = engine()
+        val state = e.reconcile(
+            null,
+            discharging(10 * MINUTE, boot = BootIdentity.Derived(EPOCH)),
+        ).state
+
+        val stale = e.accept(state, discharging(5 * MINUTE, boot = BootIdentity.Derived(EPOCH)))
+
+        val rejected = stale.result as TransitionResult.Rejected
+        assertEquals(TransitionResult.RejectionReason.OUT_OF_ORDER, rejected.reason)
+        assertEquals("state must be untouched", state, stale.state)
     }
 
     @Test

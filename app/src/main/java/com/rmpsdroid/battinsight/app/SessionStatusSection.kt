@@ -158,6 +158,8 @@ private fun describeResult(result: TransitionResult?): String = when (result) {
         SessionBoundaryReason.POWER_TRANSITION -> "Power source changed"
         SessionBoundaryReason.BOOT_BOUNDARY -> "Device restarted"
         SessionBoundaryReason.RECOVERY -> "Change detected at start-up (not observed directly)"
+        SessionBoundaryReason.UNPROVEN_CONTINUITY ->
+            "Could not confirm this continues the previous session"
         SessionBoundaryReason.INCONSISTENT_STATE -> "Previous state could not be trusted"
         SessionBoundaryReason.NONE -> "Session changed"
     }

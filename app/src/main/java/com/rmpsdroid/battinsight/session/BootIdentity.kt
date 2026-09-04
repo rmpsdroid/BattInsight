@@ -1,39 +1,51 @@
 package com.rmpsdroid.battinsight.session
 
-import kotlin.math.abs
-
 /**
  * Which boot an observation belongs to.
  *
  * Everything monotonic depends on this. `elapsedRealtime` restarts at zero on every boot,
- * so two readings can only be ordered — or subtracted — once they are known to share one.
+ * so two readings can only be ordered -- or subtracted -- once they are known to share one.
  *
  * The type carries *how well* that is known, because the honest answers are three, not two.
  * The predecessor deleted all history on every boot, which is one way of never having to
  * answer the question; refusing an invalid comparison and keeping the data is the other.
+ *
+ * ## Only the kernel identifier proves anything
+ *
+ * [Kernel] is the sole authoritative variant. Everything else yields
+ * [BootRelation.UNKNOWN], in both directions, always.
+ *
+ * That is stricter than it first appears necessary, and the reason is worth stating: an
+ * earlier version of this file treated a large change in the *estimated* boot time as proof
+ * of a reboot. It is not. Android's contract is explicit that `System.currentTimeMillis`
+ * may be changed by the user or the network and may jump either way at any moment, while
+ * `SystemClock.elapsedRealtime` continues undisturbed -- so a clock correction of six hours
+ * moves the estimate by six hours on one uninterrupted boot. Reading that as a reboot would
+ * have split a real session and labelled the break *device restarted*, which is worse than
+ * admitting ignorance: a confident false statement rather than an honest "cannot tell".
  */
 sealed interface BootIdentity {
 
     /**
      * The kernel's own identifier, from `/proc/sys/kernel/random/boot_id`.
      *
-     * Authoritative in both directions: equal means the same boot, unequal means a
-     * different one. This is the only variant that can prove sameness.
+     * The only variant that establishes anything. Equal means the same boot; unequal means
+     * a different one. Measured readable by an ordinary application on Android 16.
      */
     data class Kernel(val id: String) : BootIdentity
 
     /**
-     * A fallback derived from wall clock minus elapsed realtime.
+     * A non-authoritative estimate of when this boot began, from wall clock minus elapsed
+     * realtime.
      *
-     * Used when the kernel identifier cannot be read. It can establish that two
-     * observations are from **different** boots — a large jump in apparent boot time cannot
-     * happen within one — but it can never establish that they are from the same one,
-     * because two separate boots can easily produce close values, and because the two
-     * clocks drift relative to each other anyway.
+     * Used when the kernel identifier cannot be read. It **proves nothing**: it cannot
+     * establish that two observations share a boot, and -- the correction this variant now
+     * embodies -- it cannot establish that they do not either, because the wall clock it is
+     * built from moves independently of any reboot.
      *
-     * Modelled explicitly rather than papered over: a fallback that quietly claimed
-     * sameness would be inventing certainty the data does not contain, and every counter
-     * delta downstream would inherit that invention.
+     * It is retained because the estimate is genuinely useful in a diagnostic export, where
+     * an approximate boot time helps a human make sense of a timeline. It simply may not
+     * decide anything.
      */
     data class Derived(val approximateBootWallClockMillis: Long) : BootIdentity
 
@@ -48,22 +60,14 @@ sealed interface BootIdentity {
             Unknown -> "unknown"
         }
 
-    /** Whether this identity can ever prove two observations share a boot. */
-    val canProveSameness: Boolean get() = this is Kernel
-
-    companion object {
-        /**
-         * How far two derived boot times may differ and still be treated as inconclusive
-         * rather than certainly different.
-         *
-         * Generous on purpose. The two clocks drift, `elapsedRealtime` may or may not
-         * advance during deep sleep on a given device, and NTP corrections move the wall
-         * clock underneath us. A tolerance that is too tight would report a boot change
-         * that never happened, which is worse than reporting "unknown": one is a false
-         * statement, the other is an accurate one.
-         */
-        const val DERIVED_TOLERANCE_MILLIS: Long = 10 * 60 * 1000L
-    }
+    /**
+     * Whether this identity can establish a boot relation at all, in either direction.
+     *
+     * True only for [Kernel]. Named for the relation rather than for sameness because the
+     * correction this file embodies is symmetric: the fallback can prove neither that two
+     * observations share a boot nor that they do not.
+     */
+    val canProveBootRelation: Boolean get() = this is Kernel
 }
 
 /** How two boot identities relate. Three answers, because there are three. */
@@ -74,30 +78,32 @@ enum class BootRelation {
     /** Proven to be different boots. Monotonic comparison is meaningless. */
     DIFFERENT,
 
-    /** Not established either way. Nothing monotonic may be concluded. */
+    /**
+     * Not established either way.
+     *
+     * The answer whenever the kernel identifier is unavailable. It is not a failure state:
+     * it is the accurate description of what the available evidence supports, and callers
+     * are expected to behave conservatively rather than pick a side.
+     */
     UNKNOWN,
 }
 
 /**
  * Compares two boot identities without ever guessing.
  *
- * The asymmetry is deliberate: [BootIdentity.Derived] may return [BootRelation.DIFFERENT]
- * but never [BootRelation.SAME], and a [BootIdentity.Kernel] compared against a
- * [BootIdentity.Derived] is [BootRelation.UNKNOWN] because they measure different things.
+ * Total, and deliberately unexciting: two kernel identifiers decide, and every other
+ * combination is [BootRelation.UNKNOWN].
+ *
+ * Nothing here consults a clock, an estimate or a tolerance. There is no tolerance left to
+ * consult -- a threshold on the derived estimate was the defect this function was rewritten
+ * to remove, and reintroducing one would reintroduce it.
  */
-fun BootIdentity.relationTo(other: BootIdentity): BootRelation = when {
-    this is BootIdentity.Kernel && other is BootIdentity.Kernel ->
+fun BootIdentity.relationTo(other: BootIdentity): BootRelation =
+    if (this is BootIdentity.Kernel && other is BootIdentity.Kernel) {
         if (id == other.id) BootRelation.SAME else BootRelation.DIFFERENT
-
-    this is BootIdentity.Derived && other is BootIdentity.Derived -> {
-        val drift = abs(approximateBootWallClockMillis - other.approximateBootWallClockMillis)
-        // Only ever DIFFERENT or UNKNOWN. A derived identity cannot prove sameness.
-        if (drift > BootIdentity.DERIVED_TOLERANCE_MILLIS) BootRelation.DIFFERENT
-        else BootRelation.UNKNOWN
+    } else {
+        BootRelation.UNKNOWN
     }
-
-    else -> BootRelation.UNKNOWN
-}
 
 /** Reads the device's boot identity. An interface so the engine is testable without Android. */
 interface BootIdentitySource {

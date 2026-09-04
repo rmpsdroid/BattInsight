@@ -7,10 +7,15 @@ import java.util.UUID
  * Which run of the platform's counters a snapshot belongs to.
  *
  * Exists because Android's batterystats counters can reset independently of anything
- * BattInsight decides. A reboot resets them; so does `dumpsys batterystats --reset`, which
- * some manufacturer software and some other applications invoke. Two snapshots from
- * different generations must never have raw counters subtracted, no matter how sensible
- * the arithmetic looks.
+ * BattInsight decides -- `dumpsys batterystats --reset` does it, and some manufacturer
+ * software and other applications invoke that. Two snapshots from different generations
+ * must never have raw counters subtracted, no matter how sensible the arithmetic looks.
+ *
+ * A **proven** boot boundary also advances the generation. That is a comparability policy
+ * of ours, not a claim about the platform: BattInsight has no counter reset detector yet,
+ * so rather than assert that every counter physically restarts at every reboot, it simply
+ * declines to subtract across a boundary it cannot reason about. Declining costs nothing
+ * and cannot be wrong.
  *
  * A generation is **not** a session and the two move independently:
  *
@@ -38,7 +43,13 @@ value class CounterGeneration(val value: Long) : Comparable<CounterGeneration> {
 
 /** Why a counter generation changed. Recorded so a refused delta can explain itself. */
 enum class CounterGenerationChange {
-    /** A different boot was detected. Counters always restart. */
+    /**
+     * A different boot was proven.
+     *
+     * The generation advances as a comparability policy, not because every counter is
+     * asserted to restart: with no reset detector yet, declining to subtract across a
+     * boundary we cannot reason about is the conservative answer.
+     */
     BOOT_CHANGED,
 
     /**

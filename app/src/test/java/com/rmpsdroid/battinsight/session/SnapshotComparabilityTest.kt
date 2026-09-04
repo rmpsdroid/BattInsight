@@ -194,22 +194,34 @@ class SnapshotComparabilityTest {
     }
 
     @Test
-    fun `only a kernel identity claims it can prove sameness`() {
-        assertTrue(kernelBoot().canProveSameness)
-        assertTrue(!BootIdentity.Derived(EPOCH).canProveSameness)
-        assertTrue(!BootIdentity.Unknown.canProveSameness)
+    fun `only a kernel identity claims it can establish a boot relation`() {
+        assertTrue(kernelBoot().canProveBootRelation)
+        assertTrue(!BootIdentity.Derived(EPOCH).canProveBootRelation)
+        assertTrue(!BootIdentity.Unknown.canProveBootRelation)
     }
 
+    /**
+     * Replaces a test that asserted the defect.
+     *
+     * It previously required a derived estimate differing by more than a tolerance to
+     * report [BootRelation.DIFFERENT], which encoded exactly the unsound rule: the estimate
+     * is built from a wall clock that can jump by hours on one uninterrupted boot, so a
+     * large difference is not evidence of a reboot. The estimate now decides nothing, in
+     * either direction, at any distance.
+     */
     @Test
-    fun `a derived identity within tolerance is inconclusive, and beyond it is different`() {
+    fun `a derived identity is inconclusive at every distance`() {
         val base = BootIdentity.Derived(EPOCH)
-        val close = BootIdentity.Derived(EPOCH + BootIdentity.DERIVED_TOLERANCE_MILLIS - 1)
-        val far = BootIdentity.Derived(EPOCH + BootIdentity.DERIVED_TOLERANCE_MILLIS + 1)
-
-        assertEquals(BootRelation.UNKNOWN, base.relationTo(close))
-        assertEquals(BootRelation.DIFFERENT, base.relationTo(far))
-        // Symmetric: direction of travel does not change the answer.
-        assertEquals(BootRelation.DIFFERENT, far.relationTo(base))
+        listOf(0L, 1L, MINUTE, HOUR, 6 * HOUR, 24 * HOUR, 365 * 24 * HOUR).forEach { delta ->
+            val other = BootIdentity.Derived(EPOCH + delta)
+            assertEquals(
+                "a difference of ${delta}ms must remain unproven",
+                BootRelation.UNKNOWN,
+                base.relationTo(other),
+            )
+            // Symmetric: direction of travel does not change the answer.
+            assertEquals(BootRelation.UNKNOWN, other.relationTo(base))
+        }
     }
 
     @Test

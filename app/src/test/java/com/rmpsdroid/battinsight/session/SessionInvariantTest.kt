@@ -262,6 +262,103 @@ class SessionInvariantTest {
         assertEquals(50 * MINUTE, state.session!!.elapsedMillis)
     }
 
+    /**
+     * The invariant the Phase 5 suite was missing.
+     *
+     * Its wall-clock test varied the clock but pinned a `Kernel` identity, and its
+     * `Derived` tests varied the estimate directly without ever moving a clock. Neither
+     * combination exercised the real device path -- one boot, a clock that jumps, and an
+     * estimate recomputed from that clock -- so the unsound fallback rule survived a
+     * green suite.
+     *
+     * This drives exactly that path: a single uninterrupted boot with no kernel identifier,
+     * a wall clock lurching by up to a day in both directions, and the estimate rebuilt from
+     * it every time, as the adapter does. No boot boundary may ever appear.
+     */
+    @Test
+    fun `wall-clock movement cannot manufacture a boot boundary when only the fallback exists`() {
+        (1..12).forEach { seed ->
+            val random = Random(seed)
+            val engine = SessionEngine(SequentialIds())
+            var elapsed = 0L
+            var state = engine.reconcile(
+                null,
+                discharging(elapsed, boot = BootIdentity.Derived(EPOCH), wallClockMillis = EPOCH),
+            ).state
+            val sessionId = state.session!!.id
+            var attached = false
+            var cableEverMoved = false
+
+            repeat(200) {
+                elapsed += random.nextLong(1, 5 * MINUTE)
+                // One boot throughout. The clock wanders; the estimate follows it.
+                val wall = EPOCH + elapsed + random.nextLong(-24 * HOUR, 24 * HOUR)
+                val estimate = wall - elapsed
+
+                // The cable moves occasionally, which is a legitimate boundary and is
+                // allowed; only a *boot* boundary is forbidden here.
+                if (random.nextInt(100) < 10) {
+                    attached = !attached
+                    cableEverMoved = true
+                }
+
+                val transition = engine.accept(
+                    state,
+                    observation(
+                        elapsedMillis = elapsed,
+                        status = if (attached) BatteryStatus.CHARGING else BatteryStatus.DISCHARGING,
+                        plug = if (attached) PlugSource.AC else PlugSource.NONE,
+                        boot = BootIdentity.Derived(estimate),
+                        wallClockMillis = wall,
+                    ),
+                )
+                state = transition.state
+
+                val result = transition.result
+                if (result is TransitionResult.Boundary) {
+                    assertTrue(
+                        "seed $seed manufactured a boot boundary from a clock change",
+                        result.reason != SessionBoundaryReason.BOOT_BOUNDARY,
+                    )
+                    assertTrue(
+                        "seed $seed claimed a boot change with no proof",
+                        result.trigger != SessionTrigger.BOOT_CHANGED,
+                    )
+                }
+            }
+
+            if (!cableEverMoved) {
+                // The cable never moved, so nothing legitimate could have ended the
+                // interval. Any change of identity would have come from the clock, which is
+                // exactly what must not happen.
+                //
+                // This guard originally tested `!attached`, which was wrong: a cable that
+                // toggled and returned leaves `attached` false while having produced real
+                // power transitions, so the assertion could fail for a legitimate reason.
+                // That was a defect in the test, not in the engine.
+                assertEquals(
+                    "seed $seed lost the session to clock movement alone",
+                    sessionId,
+                    state.session!!.id,
+                )
+            }
+        }
+    }
+
+    /**
+     * A fallback identity can never produce a proven relation, over a wide random spread.
+     */
+    @Test
+    fun `no pair of fallback estimates ever produces a proven boot relation`() {
+        val random = Random(4242)
+        repeat(2_000) {
+            val a = BootIdentity.Derived(random.nextLong(0, Long.MAX_VALUE / 2))
+            val b = BootIdentity.Derived(random.nextLong(0, Long.MAX_VALUE / 2))
+            assertEquals(BootRelation.UNKNOWN, a.relationTo(b))
+            assertEquals(BootRelation.UNKNOWN, b.relationTo(a))
+        }
+    }
+
     @Test
     fun `a counter generation only ever moves forward`() {
         (1..8).forEach { seed ->

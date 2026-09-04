@@ -76,7 +76,7 @@ object SnapshotComparability {
             BootRelation.UNKNOWN -> return Comparability.NotComparable(
                 Comparability.Reason.MISSING_IDENTITY,
                 "It could not be established that both readings came from the same start-up" +
-                    (if (!earlier.bootIdentity.canProveSameness || !later.bootIdentity.canProveSameness) {
+                    (if (!earlier.bootIdentity.canProveBootRelation || !later.bootIdentity.canProveBootRelation) {
                         ", because the kernel boot identifier was unavailable."
                     } else "."),
             )

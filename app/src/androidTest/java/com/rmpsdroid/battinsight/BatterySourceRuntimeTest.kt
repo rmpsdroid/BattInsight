@@ -55,10 +55,10 @@ class BatterySourceRuntimeTest {
     /**
      * Whether `/proc/sys/kernel/random/boot_id` is readable by an ordinary application.
      *
-     * This is a measurement, not an assertion of a preferred answer. It decides how strong
-     * every monotonic comparison in the product can be: with the kernel identifier the
-     * engine can *prove* two readings share a boot, and without it the derived fallback can
-     * only ever prove they do not.
+     * This is a measurement, not an assertion of a preferred answer. It decides whether the
+     * product can reason about boots at all: with the kernel identifier the engine can prove
+     * two readings share a boot or do not, and without it the fallback proves neither, so
+     * every monotonic comparison is refused rather than guessed.
      */
     @Test
     fun bootIdentifierReadabilityIsMeasured() {
@@ -80,12 +80,12 @@ class BatterySourceRuntimeTest {
         )
         if (canRead && !content.isNullOrEmpty()) {
             assertTrue("a readable boot_id must produce a Kernel identity", identity is BootIdentity.Kernel)
-            assertTrue("and that identity can prove sameness", identity.canProveSameness)
+            assertTrue("and that identity can establish a boot relation", identity.canProveBootRelation)
         } else {
             assertTrue("an unreadable boot_id must degrade to Derived", identity is BootIdentity.Derived)
             assertTrue(
-                "and must not claim it can prove sameness",
-                !identity.canProveSameness,
+                "and must not claim it can establish a boot relation",
+                !identity.canProveBootRelation,
             )
         }
     }
