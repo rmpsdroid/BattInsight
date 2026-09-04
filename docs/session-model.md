@@ -1,8 +1,8 @@
 # Session model
 
-> **Implemented in Phase 5.** The engine, the time model, boot identity, comparability
-> and cold-start reconciliation all exist and are tested. Durable persistence does not —
-> that is Phase 6.
+> **Implemented in Phases 5 and 6.** The engine, the time model, boot identity,
+> comparability and cold-start reconciliation all exist and are tested, and Phase 6 made
+> them durable. See [persistence.md](persistence.md) for the storage side.
 
 ## Ownership
 
@@ -261,17 +261,18 @@ rather than glossed, and it is why cold-start reconciliation exists.
 Two alternatives were considered and both declined for now:
 
 - **A manifest receiver** would survive process death, and `ACTION_POWER_CONNECTED` is among
-  the implicit broadcasts still exempt from the Android 8 background limits. It is not added
-  yet because it would have nowhere to record what it saw — Phase 5 has no durable storage,
-  so a receiver waking the process, observing a transition and exiting would lose it
-  immediately. It becomes worth adding in Phase 6, alongside the persistence that gives it a
-  point.
+  the implicit broadcasts still exempt from the Android 8 background limits. Phase 5 declined
+  it because there was nowhere to record what it saw. Phase 6 removed that objection and
+  re-evaluated it against ten criteria anyway, and still declined: it buys boundary
+  *timestamp* precision for data nothing yet displays, at the cost of a permanent background
+  component and a silent-degradation mode under background restrictions. The full evaluation
+  is in [persistence.md](persistence.md).
 - **A foreground service** is refused. Running permanently with a permanent notification, to
   avoid an occasional inference, is a bad trade for a diagnostics tool.
 
-`RECEIVE_BOOT_COMPLETED` is **not** requested. The engine identifies a reboot from boot
-identity at the next start, so nothing in Phase 5 needs to launch at boot, and a permission
-without a demonstrated need is not requested.
+`RECEIVE_BOOT_COMPLETED` is **not** requested, and Room did not change that. The engine
+identifies a reboot from boot identity at the next start, with the same certainty whether it
+learns of it immediately or hours later, so nothing needs to launch at boot.
 
 The application declares no receiver of its own. The merged manifest contains exactly one,
 `androidx.profileinstaller.ProfileInstallReceiver`, arriving transitively with Compose; it
@@ -280,13 +281,15 @@ is exported by design so `adb shell cmd package compile` can reach it, and guard
 
 ## Persistence
 
-`SessionStateStore` is declared and only `InMemorySessionStateStore` implements it.
+`SessionStateStore` is implemented by `RoomSessionStateStore`, and session state now
+survives process death — proved on a real device by killing the process that wrote it and
+recovering the same session id in another. `InMemorySessionStateStore` remains, because the
+engine's rules must stay testable without a database.
 
-The consequence is stated rather than hidden: session state does not survive process death
-in Phase 5, so every cold start reconciles from nothing and begins a fresh interval. The
-reconciliation logic that will make that unnecessary already exists and is tested; it simply
-has nothing to load yet.
+The seam is what kept the engine pure: `SessionStateStore` names no Room, SQLite or Android
+type, and a test fails the build if anything in this package imports one.
 
-Writing the model to preferences or ad-hoc JSON in the meantime would recreate exactly the
-opaque, unversioned blob that destroyed the predecessor's history on update — and the
-pressure to keep reading it would outlive the phase.
+Storing the model in preferences or ad-hoc JSON was never on the table. That is exactly the
+opaque, unversioned blob that destroyed the predecessor's history on update. What replaced it
+is explicit typed columns, a committed schema, and no destructive migration fallback —
+see [persistence.md](persistence.md).

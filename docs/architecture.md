@@ -1,7 +1,7 @@
 # Architecture
 
-> Phases 2A-5. Collection, capability, access setup and the session engine exist.
-> Persistence and decoding do not.
+> Phases 2A-6. Collection, capability, access setup, the session engine and durable
+> persistence exist. Decoding does not.
 
 ## Layering
 
@@ -15,7 +15,7 @@ upgrade there once deleted every user's history.
 | **Capability** | Decide what an outcome *means* for a given source | `Capability`, `CapabilityState`, `SourceReading`, `CapabilityInterpreter` |
 | **Domain** | Normalise raw output into stable value types | `BatteryObservation` only; batterystats normalisation is not started |
 | **Session engine** | Snapshot identity, session boundaries, comparability, reconciliation | `SessionEngine`, `BatterySession`, `BatterySnapshot`, `SnapshotComparability`. Pure Kotlin. See `session-model.md` |
-| **Persistence** | Store snapshots durably with explicit schema versioning | Not started |
+| **Persistence** | Store snapshots durably with explicit schema versioning | `BattInsightDatabase`, `SessionDao`, `RoomSessionStateStore`, explicit entity mappers. Room, schema exported and committed. See `persistence.md` |
 | **Access setup** | Turn a user's access choice into working access, and verify it | `AccessMode`, `SetupAction`, `SetupState`, `AccessSetupCoordinator` |
 | **Presentation** | Screens, chart models, reports | Capability Centre, onboarding and Manage access (Compose) |
 
@@ -74,7 +74,7 @@ false.
 |---|---|---|
 | Compose vs Views | Phase 8 | The session engine matters more and is testable without either. A placeholder activity does not commit us |
 | Dependency injection | When manual wiring hurts | Constructor injection covers swapping backends in tests |
-| Room schema | Phase 6 | No domain model to persist yet |
+| Collector tables (wakelocks, alarms, CPU) | When the decoder exists | A schema committed before the shape of the data is known is a migration waiting to happen |
 | Routine acquisition format | Phase 7 | See `data-sources.md` |
 
 ---

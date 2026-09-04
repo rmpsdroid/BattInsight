@@ -162,8 +162,26 @@ Shizuku configuration edited behind their back.
 
 ## Persisted state
 
-One string: the access mode the user chose. Nothing diagnostic is written to disk — no
-payloads, no package lists, no permission text, no capability reports.
+Two things: the access mode the user chose, and the user's own battery sessions — the
+charge and discharge intervals BattInsight observed, plus the readings that bound them
+(level, temperature, voltage, charge counter, plug source, health) and the times they were
+taken.
+
+Those readings come from the *public* `ACTION_BATTERY_CHANGED` broadcast that every
+application on Android can see. They are not privileged output, they name no packages, and
+they describe no other application.
+
+Still **not** written to disk, deliberately: privileged payloads, package lists, permission
+text and capability reports. Probe output is inspected in memory and discarded.
+
+Two identifiers are stored per reading. One is a UUID this application generates, meaningless
+elsewhere. The other is the kernel boot identifier, which changes on every restart and is
+what distinguishes a reboot from a clock change; it never leaves the device, and cloud backup
+remains disabled, so it cannot be restored onto different hardware.
+
+Nothing is ever deleted on the user's behalf. A version that cannot read what an earlier one
+wrote reports `MIGRATION_FAILURE` and leaves the data alone; there is no destructive
+migration fallback, and a test fails the build if one is added.
 
 There is deliberately no `onboardingCompleted` flag. Shizuku stops on reboot and permissions
 can be revoked from Settings; a stored completion flag would keep asserting readiness the

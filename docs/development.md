@@ -11,6 +11,9 @@
 | compileSdk | 37 | API surface compiled against |
 | targetSdk | 36 | Runtime behaviour opted into |
 | minSdk | 33 | Android 13 |
+| Room | 2.8.4 | Session persistence. Schemas exported to `app/schemas/` and committed |
+| KSP | 2.2.10-2.0.2 | Room's annotation processor. The Kotlin part must match what AGP supplies |
+| Robolectric | 4.16.1 | Runs the Room tests on the JVM, so CI exercises real SQLite |
 
 ```bash
 ./gradlew assembleDebug
@@ -85,12 +88,37 @@ build fails after bumping AGP with a Compose or Kotlin version error, this plugi
 first thing to check. Verify a bump with a genuine recompile: Gradle will report
 `FROM-CACHE` and appear to succeed without having compiled anything.
 
+KSP is coupled the same way and more tightly: its version is `<kotlin>-<ksp>`, and the
+Kotlin half must equal the Kotlin AGP supplies (2.2.10 for AGP 9.4.0). A mismatch fails at
+configuration time with a clear message.
+
+### Three workarounds that should not become permanent
+
+Each is a version-skew problem, not a design choice, and each has a condition for removal:
+
+**`android.disallowKotlinSourceSets=false`** in `gradle.properties`. KSP does not yet
+support AGP 9's built-in Kotlin and registers sources the new default forbids. The flag is
+Android's own documented bridge, linked from the error message itself. Remove it once KSP
+supports AGP 9 natively.
+
+**A `kotlinx-serialization` constraint** in `app/build.gradle.kts`. DataStore 1.2.1 brings
+1.7.3; Room 2.8.4 reads its exported schemas through serializers generated against 1.8.x and
+fails on 1.7.3 with `AbstractMethodError: typeParametersSerializers()`. The fix has to sit on
+the *application* classpath even though only the migration tests need it, because AGP's
+consistent resolution pins the androidTest classpath to whatever the app runtime resolved.
+Remove once DataStore ships 1.8.x.
+
+**`@Config(sdk = [34])` on the Robolectric tests.** Emulating SDK 36 requires Java 21 and
+this project is on Java 17. Room and SQLite behaviour under test does not vary with the
+emulated API level, and real Android 16 is covered by the instrumented suite. Remove when
+the project moves to Java 21.
+
 ---
 
 ## Running the tests
 
 ```bash
-./gradlew testDebugUnitTest          # 258 unit tests; 10 fixture cases skip without an archive
+./gradlew testDebugUnitTest          # 326 unit tests; 10 fixture cases skip without an archive
 ./gradlew lintDebug                  # a build gate; abortOnError is enabled
 ```
 
@@ -125,6 +153,43 @@ truth; without it that case reports as skipped.
 Install with `adb install -r`. **Never `-g`** — it grants every requested permission, which
 silently defeats the denial paths most of these tests exist to check.
 
+### Persistence tests
+
+The Room tests run on the JVM under Robolectric, so CI — which has no emulator — exercises
+the real schema, real SQLite and the real generated DAO rather than a fake:
+
+```bash
+./gradlew testDebugUnitTest --tests "*Persistence*"
+```
+
+`PersistencePolicyTest` reads the source tree rather than calling an API, because what it
+checks is the *absence* of things: no `fallbackToDestructiveMigration()` anywhere in
+production code, no Room or Android import in the `session` package, and an exported schema
+committed for every database version.
+
+Two things cannot be proven on the JVM and run on the emulator instead:
+
+```bash
+tools/emu-adb.sh shell am instrument -w   -e class com.rmpsdroid.battinsight.PersistenceMigrationTest   com.rmpsdroid.battinsight.test/androidx.test.runner.AndroidJUnitRunner
+
+tools/process-death-proof.sh
+```
+
+The second runs its two halves as separate instrumentation invocations with `am force-stop`
+between them, and requires the two processes to report different pids — otherwise a
+surviving process with a warm Room singleton could pass having demonstrated nothing. See
+[persistence.md](persistence.md).
+
+### Never target the wrong device
+
+`tools/emu-adb.sh` wraps `adb` and refuses any serial that is not `emulator-<port>`. This is
+not hypothetical caution: a physical Samsung is routinely attached over wireless ADB, and
+bare `adb` with no serial picks a device for you. The guard checks the *serial* rather than a
+device property, because reading a property means touching the device to find out whether
+you may. It also refuses `install -g` outright.
+
+Prefer it to `connectedAndroidTest`, which targets every attached device.
+
 ### Session engine tests
 
 The engine is pure Kotlin, so its scenarios need no device and no emulator:
@@ -145,5 +210,8 @@ never simulates a charge transition.
 
 ## Not yet decided
 
-The routine acquisition format (protobuf versus checkin), dependency injection, and the Room
-schema.
+The routine acquisition format (protobuf versus checkin) and dependency injection.
+
+Collector tables — wakelocks, alarms, sensors, CPU, network — are deliberately absent from
+the schema until the decoder exists. A schema committed before the shape of the data is known
+is a migration waiting to happen.
