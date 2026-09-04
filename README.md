@@ -54,7 +54,7 @@ that silently shows an empty screen when it lacks access is worse than one that 
 - **Capability Centre** — a screen showing each backend, permission and capability with a
   specific reason for its state, plus the preferred and active backend and why
 - **Access setup** — onboarding that offers three routes and lets you choose: live Shizuku,
-  a one-time Shizuku-assisted grant, or three ADB commands run from a computer. Nothing is
+  a one-time Shizuku-assisted grant, or three ADB commands run from a computer. g is
   granted without an explicit confirmation naming exactly what will change
 - **Access removal** — the three permissions can be removed again from inside the app when
   Shizuku is available, or with the exact ADB commands when it is not
@@ -95,7 +95,7 @@ choose for you, because they differ in what the application ends up holding.
 
 | Route | What BattInsight holds | Needs Shizuku running | Notes |
 |---|---|---|---|
-| **Shizuku (recommended)** | Nothing | Yes | Measured faster, and resolves application names the app UID cannot. Shizuku usually needs starting again after a reboot |
+| **Shizuku (recommended)** | None of the 3 elevated Android permissions | Yes | Measured faster, and resolves application names the app UID cannot. Shizuku usually needs starting again after a reboot |
 | **Independent access** | `DUMP`, `PACKAGE_USAGE_STATS`, `INTERACT_ACROSS_USERS` until removed | No | Granted once, with Shizuku's help, then works on its own |
 | **ADB commands** | The same three permissions | No | Three commands run from a computer; no extra app required |
 
