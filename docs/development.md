@@ -11,8 +11,9 @@
 | compileSdk | 37 | API surface compiled against |
 | targetSdk | 36 | Runtime behaviour opted into |
 | minSdk | 33 | Android 13 |
-| Room | 2.8.4 | Session persistence. Schemas exported to `app/schemas/` and committed |
-| KSP | 2.2.10-2.0.2 | Room's annotation processor. The Kotlin part must match what AGP supplies |
+| Room | 3.0.2 | Session persistence, under `androidx.room3`. Schemas exported to `app/schemas/` and committed |
+| KSP | 2.3.11 | Room's annotation processor. Versioned independently of Kotlin since 2.3.x |
+| androidx.sqlite | 2.7.0 | Room 3 needs an explicit driver; this supplies `AndroidSQLiteDriver` |
 | Robolectric | 4.16.1 | Runs the Room tests on the JVM, so CI exercises real SQLite |
 
 ```bash
@@ -88,30 +89,61 @@ build fails after bumping AGP with a Compose or Kotlin version error, this plugi
 first thing to check. Verify a bump with a genuine recompile: Gradle will report
 `FROM-CACHE` and appear to succeed without having compiled anything.
 
-KSP is coupled the same way and more tightly: its version is `<kotlin>-<ksp>`, and the
-Kotlin half must equal the Kotlin AGP supplies (2.2.10 for AGP 9.4.0). A mismatch fails at
-configuration time with a clear message.
+KSP is no longer coupled to the Kotlin version the way it once was. KSP 2.3.x is versioned
+independently -- the old `<kotlin>-<ksp>` scheme is gone -- and current AGP 9 guidance names
+2.3.6 as the floor. This project tracks the current stable release.
 
-### Three workarounds that should not become permanent
+### An escape hatch that was removed
+
+`gradle.properties` briefly carried `android.disallowKotlinSourceSets=false`, because KSP
+2.2.x registered its generated sources through the `kotlin.sourceSets` DSL that AGP 9's
+built-in Kotlin disallows. **It is gone, and must not come back.** KSP 2.3.x no longer needs
+it, and current AGP 9 guidance says explicitly not to set it. If a KSP change ever appears to
+require it again, that is a signal to look at the processor version, not to restore the flag.
+
+### Two workarounds that should not become permanent
 
 Each is a version-skew problem, not a design choice, and each has a condition for removal:
 
-**`android.disallowKotlinSourceSets=false`** in `gradle.properties`. KSP does not yet
-support AGP 9's built-in Kotlin and registers sources the new default forbids. The flag is
-Android's own documented bridge, linked from the error message itself. Remove it once KSP
-supports AGP 9 natively.
-
 **A `kotlinx-serialization` constraint** in `app/build.gradle.kts`. DataStore 1.2.1 brings
-1.7.3; Room 2.8.4 reads its exported schemas through serializers generated against 1.8.x and
-fails on 1.7.3 with `AbstractMethodError: typeParametersSerializers()`. The fix has to sit on
-the *application* classpath even though only the migration tests need it, because AGP's
-consistent resolution pins the androidTest classpath to whatever the app runtime resolved.
-Remove once DataStore ships 1.8.x.
+1.7.3; Room reads its exported schemas through serializers generated against 1.8.x and fails
+on 1.7.3 with `AbstractMethodError: typeParametersSerializers()`. Re-measured against Room
+3.0.2 rather than assumed: `room3-migration-jvm:3.0.2` declares 1.8.1, and with the constraint
+removed the androidTest classpath still resolves 1.7.3. The fix has to sit on the
+*application* classpath even though only the migration tests need it, because AGP's consistent
+resolution pins the androidTest classpath to whatever the app runtime resolved. Remove once
+DataStore ships 1.8.x.
 
 **`@Config(sdk = [34])` on the Robolectric tests.** Emulating SDK 36 requires Java 21 and
 this project is on Java 17. Room and SQLite behaviour under test does not vary with the
 emulated API level, and real Android 16 is covered by the instrumented suite. Remove when
 the project moves to Java 21.
+
+### Why Room 3, and why the framework driver
+
+Room 3.0.2 (`androidx.room3`) rather than Room 2.8.4 (`androidx.room`). They are separate
+artifact families, not an upgrade in place.
+
+The decision is about fit, not about Room 3 being universally better. BattInsight is
+pre-release: there is no shipped Room 2 database on anyone's device, so the migration costs a
+day of edits rather than a user-data risk, and that window closes permanently at first
+release. Room 3 is Kotlin-, KSP- and coroutines-first, which is what this codebase already
+was -- every DAO function was already `suspend`, so the "suspend required" rule cost nothing.
+Room 3 also removed the closed-database behaviour that Room 2 required a workaround for
+(see [persistence.md](persistence.md)), and the exported schema came out byte-identical with
+the same identity hash, so the database stayed at version 1 and no migration was invented to
+accommodate a library rename.
+
+Room 3 requires an explicit `SQLiteDriver`. This project uses **`AndroidSQLiteDriver`** from
+`androidx.sqlite:sqlite-framework`, not `BundledSQLiteDriver`. The bundled driver ships its
+own SQLite build; every foreign-key and constraint measurement in this project was taken
+against the platform's SQLite, and answering those questions about a different SQLite than the
+one on the user's device would quietly invalidate them.
+
+What the migration actually cost: import renames, an explicit driver on the test builder, and
+rewriting the handful of raw-SQL test call sites, because `SupportSQLiteDatabase`,
+`openHelper.writableDatabase` and the `Cursor` API are gone in favour of borrowed connections
+and prepared statements. No production logic changed.
 
 ---
 

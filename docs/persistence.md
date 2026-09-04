@@ -62,6 +62,32 @@ and loses nothing.
 `PRAGMA foreign_keys = 1` and `PRAGMA defer_foreign_keys = 0` are asserted on a real
 Android 16 device by `PersistenceMigrationTest`, not only under Robolectric.
 
+## Writes update rows; they do not replace them
+
+The DAO uses `@Upsert`. That is a correctness choice, and it replaced something that was
+measurably wrong.
+
+The writes began as `@Insert(onConflict = REPLACE)`, which Room compiles to SQLite's
+`INSERT OR REPLACE`. SQLite resolves a primary-key collision there by **deleting** the
+existing row and inserting a new one. Measured on the session row while advancing its
+`latest_snapshot_id` -- the most ordinary write this application performs, on every accepted
+observation:
+
+```
+INSERT OR REPLACE:  rowidBefore=1 rowidAfter=2 identityPreserved=false
+@Upsert:            rowidBefore=1 rowidAfter=1 identityPreserved=true
+```
+
+Nothing was lost, and that is the uncomfortable part. It survived only because every foreign
+key here is `NO_ACTION` and the reinsert lands inside the same statement, so no immediate
+constraint is violated at statement end. That is a coincidence of today's schema rather than a
+property of the operation: the first child table declared with `ON DELETE CASCADE` would have
+had its rows silently deleted by what reads as a field update.
+
+`UpsertIdentityTest` asserts row identity directly rather than only checking contents
+afterwards, because a contents check passes under either implementation. Restoring
+`INSERT OR REPLACE` fails exactly three of those tests, which is what makes them evidence.
+
 ## Failure is typed, and never silent
 
 `PersistenceOutcome` names what went wrong -- `CONSTRAINT_FAILURE`, `MAPPING_FAILURE`,
@@ -80,18 +106,24 @@ first, adopts second, publishes third. A failed write leaves the previous state 
 reports the failure. The alternative -- carrying on in memory -- produces an application
 confidently describing history it will not have after the next process death.
 
-### One measured subtlety about cancellation
+### A closed database, and a workaround that no longer exists
 
-Room signals a closed database by cancelling its own internal coroutine scope, so a query
-after `close()` throws `JobCancellationException`, not `SQLiteException`. The obvious handler
+Room 3 reports a closed database as `IllegalStateException("Database is closed")`, measured
+on 3.0.2, from both the plain DAO path and the transaction path. That is an ordinary
+documented failure, so the store simply classifies it as `DATABASE_UNAVAILABLE`.
+
+This is worth recording because Room 2.8.4 did neither of those things, and the code carried
+a workaround for it. Under Room 2 a plain DAO call after `close()` threw
+`JobCancellationException` from Room's own internal coroutine scope, so the obvious handler
 -- rethrow every `CancellationException`, which structured concurrency otherwise demands --
-would propagate that into the session coordinator and cancel it *because a database went
-away*. `RoomSessionStateStore` asks whether the **caller's** context is still active: if it
-is, the cancellation came from somewhere else and is classified as `DATABASE_UNAVAILABLE`.
+would have cancelled the session coordinator *because a database went away*. The store had to
+ask whether the **caller's** context was still active to tell the two apart. Worse, a
+`@Transaction` did not fail at all: Room reopened the database underneath it and wrote into
+the reopened one.
 
-A `@Transaction`, by contrast, does not throw at all -- Room reopens the database underneath
-it. Neither behaviour is load-bearing (nothing closes the singleton), but the asymmetry is
-invisible in the API and is written down so it is not rediscovered as a bug.
+Both behaviours are gone in Room 3, so the special-case handling was deleted rather than
+carried forward. What remains is the plain rule: a `CancellationException` is the caller's
+and is rethrown.
 
 ## Versioning
 
@@ -245,6 +277,19 @@ worse than not shipping it.
 to act on visibly, and where the copy can say plainly that the interval in progress is kept.
 Until then nothing is stored that the user cannot remove by clearing the app's data or
 uninstalling, and neither is hidden from them.
+
+## Retention
+
+Session and snapshot history is **intentionally retained indefinitely for now**. Nothing
+deletes it on a schedule, and `battery_snapshots` therefore grows for as long as BattInsight
+keeps recording observations.
+
+That is a deliberate position rather than an oversight. Retention controls are deferred until
+the history and export requirements are known, because a retention policy written before
+anyone can see the data is a policy that decides what to destroy without knowing what it is
+worth. There is no background job, and no automatic deletion.
+
+The user can still remove everything by clearing the application's data or uninstalling it.
 
 ## What is not stored, and will not be
 
