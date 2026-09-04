@@ -83,9 +83,11 @@ class SessionCoordinatorTest {
         c.observe(discharging(MINUTE))
         c.observe(charging(2 * MINUTE, trigger = SessionTrigger.POWER_CONNECTED))
 
+        // load() now returns a typed result: an unreadable store is distinguishable from
+        // an empty one, so a plain null no longer conflates the two.
         val saved = store.load()
-        assertNotNull(saved)
-        assertEquals(SessionType.CHARGE, saved!!.session!!.type)
+        assertTrue("expected loaded state, was $saved", saved is StoredState.Loaded)
+        assertEquals(SessionType.CHARGE, (saved as StoredState.Loaded).state.session!!.type)
     }
 
     @Test
