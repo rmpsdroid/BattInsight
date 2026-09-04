@@ -32,6 +32,7 @@ import com.rmpsdroid.battinsight.capability.CapabilityReport
 import com.rmpsdroid.battinsight.capability.CapabilityState
 import com.rmpsdroid.battinsight.collection.BackendStatus
 import com.rmpsdroid.battinsight.permissions.PermissionStatus
+import com.rmpsdroid.battinsight.persistence.StorageCounts
 import com.rmpsdroid.battinsight.session.SessionStatus
 
 /**
@@ -55,6 +56,7 @@ fun CapabilityCentreScreen(
     report: CapabilityReport,
     mode: AccessMode,
     sessionStatus: SessionStatus,
+    storageCounts: StorageCounts?,
     onRefresh: () -> Unit,
     onManageAccess: () -> Unit,
     modifier: Modifier = Modifier,
@@ -91,7 +93,7 @@ fun CapabilityCentreScreen(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             item { SectionHeader("Battery session") }
-            item { SessionStatusSection(sessionStatus) }
+            item { SessionStatusSection(sessionStatus, storageCounts) }
 
             item {
                 Spacer(Modifier.height(8.dp))

@@ -17,7 +17,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.rmpsdroid.battinsight.persistence.StorageCounts
 import com.rmpsdroid.battinsight.session.BatteryStatus
+import com.rmpsdroid.battinsight.session.PersistenceOutcome
 import com.rmpsdroid.battinsight.session.PlugSource
 import com.rmpsdroid.battinsight.session.SessionBoundaryReason
 import com.rmpsdroid.battinsight.session.SessionStatus
@@ -38,7 +40,11 @@ import com.rmpsdroid.battinsight.session.TransitionResult
  * without thinking.
  */
 @Composable
-fun SessionStatusSection(status: SessionStatus, modifier: Modifier = Modifier) {
+fun SessionStatusSection(
+    status: SessionStatus,
+    storage: StorageCounts?,
+    modifier: Modifier = Modifier,
+) {
     var showDetails by remember { mutableStateOf(false) }
     val session = status.session
 
@@ -58,6 +64,16 @@ fun SessionStatusSection(status: SessionStatus, modifier: Modifier = Modifier) {
             Row("Session", describeType(session.type))
             Row("Started", formatDuration(session.elapsedMillis) + " ago")
             Row("Last change", describeResult(status.lastResult))
+
+            // Storage problems are shown on the face of the card rather than behind
+            // Details. If measurements are not being saved, that changes what the numbers
+            // above are worth, and a user should not have to go looking to find out.
+            status.persistence?.failureOrNull?.let { failure ->
+                Notice(describeWriteFailure(failure.outcome))
+            }
+            status.loadFailure?.let { failure ->
+                Notice(describeLoadFailure(failure.outcome))
+            }
 
             TextButton(onClick = { showDetails = !showDetails }) {
                 Text(if (showDetails) "Hide details" else "Details")
@@ -85,10 +101,17 @@ fun SessionStatusSection(status: SessionStatus, modifier: Modifier = Modifier) {
                         )
                     }
                 }
+                storage?.let {
+                    Row(
+                        "Saved on this device",
+                        "${it.sessions} ${plural(it.sessions, "session")}, " +
+                            "${it.snapshots} ${plural(it.snapshots, "reading")}",
+                    )
+                }
                 Text(
                     "Durations are measured from the device's start-up clock, so changing " +
-                        "the time or timezone does not affect them. Sessions are not saved " +
-                        "yet, so this resets when the app closes.",
+                        "the time or timezone does not affect them. Sessions are saved on " +
+                        "this device and are restored when the app reopens.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -200,4 +223,59 @@ internal fun formatOffset(minutes: Int): String {
     // a locale with non-Latin digits would make it unreadable to the tools that
     // consume an export.
     return String.format(java.util.Locale.ROOT, "%s%02d:%02d", sign, abs / 60, abs % 60)
+}
+
+/**
+ * A problem worth interrupting for.
+ *
+ * Deliberately plain rather than alarming: these states are recoverable and the application
+ * still works, so the error colour is used for the text and not as a filled background.
+ */
+@Composable
+private fun Notice(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.error,
+    )
+}
+
+private fun plural(count: Int, noun: String) = if (count == 1) noun else "${noun}s"
+
+/**
+ * What a failed write means, said in the user's terms.
+ *
+ * No SQL, no exception text and no error codes -- a person told `FOREIGN KEY constraint
+ * failed (787)` has been told nothing. Each string says the same two things: what is not
+ * happening, and whether the numbers currently on screen can still be trusted. The
+ * underlying detail is kept on [PersistenceResult.Failure] for bug reports.
+ */
+private fun describeWriteFailure(outcome: PersistenceOutcome): String = when (outcome) {
+    PersistenceOutcome.SUCCESS -> ""
+    PersistenceOutcome.DATABASE_UNAVAILABLE ->
+        "This session is not being saved: BattInsight cannot reach its storage. " +
+            "What you see here is correct but will be lost when the app closes."
+    PersistenceOutcome.MIGRATION_FAILURE ->
+        "This session is not being saved: saved history is from a newer version of " +
+            "BattInsight and cannot be updated. Your existing history has been left alone."
+    PersistenceOutcome.CONSTRAINT_FAILURE, PersistenceOutcome.MAPPING_FAILURE,
+    PersistenceOutcome.CORRUPT_STATE, PersistenceOutcome.UNKNOWN ->
+        "This session is not being saved because of a problem in BattInsight. " +
+            "What you see here is correct but will be lost when the app closes."
+}
+
+/**
+ * What a failed *load* means, which is a different statement.
+ *
+ * The distinction is the point of [StoredState.Failed] existing at all: an unreadable store
+ * is not an empty one. Saying "no history" here would be a false claim about the user's
+ * device, and would be the predecessor's exact behaviour.
+ */
+private fun describeLoadFailure(outcome: PersistenceOutcome): String = when (outcome) {
+    PersistenceOutcome.MIGRATION_FAILURE ->
+        "Earlier history could not be opened: it was saved by a newer version of " +
+            "BattInsight. Nothing has been deleted."
+    else ->
+        "Earlier history could not be read, so this session starts fresh. " +
+            "Nothing has been deleted."
 }
