@@ -44,6 +44,15 @@ jobs:
       - name: Assemble debug
         run: ./gradlew --no-daemon assembleDebug
 
+      # The release variant is built because CI once did not, and a broken release
+      # toolchain survived undetected: the Compose compiler plugin was two Kotlin minor
+      # versions ahead of AGP's built-in compiler and asked for a compose-group-mapping
+      # artifact that was never published at that version. Every debug gate stayed green.
+      # No signing configuration exists, so this produces an unsigned APK -- which is
+      # exactly enough to exercise the release Compose toolchain, R8 and lintVitalRelease.
+      - name: Assemble release (unsigned)
+        run: ./gradlew --no-daemon assembleRelease
+
       - name: Unit tests
         run: ./gradlew --no-daemon testDebugUnitTest
 
