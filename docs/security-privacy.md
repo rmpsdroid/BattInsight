@@ -78,8 +78,93 @@ the output matters, because battery statistics contain application and usage inf
 - **No installed package list, usage history, full batterystats or kernel wakelock names
   are logged.**
 
-## Nothing is changed
+## The capability layer changes nothing
 
 The capability layer observes only. It executes no `pm grant`, changes no app-op, alters no
-setting, and requests no Shizuku authorisation. Setup actions are a later phase, and the
-Capability Centre deliberately offers no Grant or Install buttons.
+setting, and requests no Shizuku authorisation. The Capability Centre offers no Grant or
+Install buttons; it links to *Manage access*, where any change is made deliberately.
+
+---
+
+## Access setup: the only thing that changes state
+
+Setup is the one part of the application permitted to alter the device, so its constraints
+are tighter than anything above.
+
+### Two security models, chosen by the user
+
+| | Live Shizuku | Independent granted-app |
+|---|---|---|
+| BattInsight holds `DUMP` / `PACKAGE_USAGE_STATS` / `INTERACT_ACROSS_USERS` | **No** | **Yes**, until revoked |
+| Privileged work happens in | A process Shizuku owns | BattInsight's own process |
+| Needs Shizuku running | Yes | No |
+| Verified on Android 16 | Acquisition succeeded with all three denied to BattInsight, in the same run its own process was refused | Acquisition succeeded with Shizuku stopped |
+
+These are not interchangeable: one permanently elevates this application's privileges and
+the other does not. The application therefore **never switches between them silently**. When
+a chosen route is unavailable and the other would work, that is reported as an offer and
+nothing changes until the user accepts it.
+
+### The typed setup boundary
+
+`SetupAction` is the only state-changing surface, and it is a closed set of six:
+
+```
+grant_dump                     /system/bin/pm grant  com.rmpsdroid.battinsight android.permission.DUMP
+grant_package_usage_stats      /system/bin/pm grant  com.rmpsdroid.battinsight android.permission.PACKAGE_USAGE_STATS
+grant_interact_across_users    /system/bin/pm grant  com.rmpsdroid.battinsight android.permission.INTERACT_ACROSS_USERS
+revoke_dump                    /system/bin/pm revoke com.rmpsdroid.battinsight android.permission.DUMP
+revoke_package_usage_stats     /system/bin/pm revoke com.rmpsdroid.battinsight android.permission.PACKAGE_USAGE_STATS
+revoke_interact_across_users   /system/bin/pm revoke com.rmpsdroid.battinsight android.permission.INTERACT_ACROSS_USERS
+```
+
+Properties that tests enforce rather than documentation asserting:
+
+- the **identifier** crosses the Binder, never a command. `IProbeService.executeSetupAction`
+  takes an action id and has no package parameter, so it cannot be asked to alter another
+  application;
+- the target package is a compile-time constant, asserted equal to `BuildConfig.APPLICATION_ID`;
+- every argument vector is exactly four elements — absolute `pm` path, verb, package,
+  permission — with no shell, no operator, no interpolation;
+- an unrecognised identifier is refused before a process is created;
+- no action names `BATTERY_STATS`, `INTERACT_ACROSS_USERS_FULL`, or any app-op.
+
+### A grant is not trusted to have worked
+
+`pm grant` reporting a clean exit is not proof; Phase 1B measured a grant reporting success
+while the thing that mattered was kept elsewhere. So the sequence:
+
+1. reads the permission before the step;
+2. executes exactly one typed grant;
+3. re-reads the permission, which is the authority;
+4. stops immediately if it did not change, reporting what *did* change rather than a bare
+   failure;
+5. and only after all three, runs a real acquisition through BattInsight's own process.
+
+Setup is reported ready only when that acquisition succeeds. Three permissions that look
+granted while reading fails is reported as a verification failure, not smoothed over.
+
+### App-operations are read, never written
+
+Phase 1B measured `PACKAGE_USAGE_STATS` granted, `GET_USAGE_STATS` left at `DEFAULT`, and
+`queryUsageStats` still returning 70 rows. Forcing the app-op is therefore unnecessary, and
+it is a heavier and less visible intervention than a permission the user approved. It is
+observed diagnostically and never mutated. Re-confirmed on Android 16 in Phase 4: the app-op
+read `default` before and after a full three-permission grant.
+
+### Removal
+
+The three permissions can be revoked from inside the application through the same typed
+actions when Shizuku is available, after an explicit confirmation. When it is not, the exact
+`adb shell pm revoke` commands are shown instead. Shizuku's own client authorisation is
+**not** touched: it lives in Shizuku, and users are directed there rather than having their
+Shizuku configuration edited behind their back.
+
+## Persisted state
+
+One string: the access mode the user chose. Nothing diagnostic is written to disk — no
+payloads, no package lists, no permission text, no capability reports.
+
+There is deliberately no `onboardingCompleted` flag. Shizuku stops on reboot and permissions
+can be revoked from Settings; a stored completion flag would keep asserting readiness the
+device no longer has. Readiness is always re-derived from a current capability report.

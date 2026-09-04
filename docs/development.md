@@ -85,6 +85,46 @@ build fails after bumping AGP with a Compose or Kotlin version error, this plugi
 first thing to check. Verify a bump with a genuine recompile: Gradle will report
 `FROM-CACHE` and appear to succeed without having compiled anything.
 
+---
+
+## Running the tests
+
+```bash
+./gradlew testDebugUnitTest          # 177 unit tests; 10 fixture cases skip without an archive
+./gradlew lintDebug                  # a build gate; abortOnError is enabled
+```
+
+Real device captures live outside this repository — they are the maintainer's own device
+state. Point the fixture cases at an archive to run them:
+
+```bash
+./gradlew testDebugUnitTest -Dbattinsight.fixtures=/path/to/archive
+```
+
+### Instrumented tests
+
+The instrumented suite observes by default and needs no arguments:
+
+```bash
+adb -s <emulator> shell am instrument -w \
+  com.rmpsdroid.battinsight.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+Three things change device state, and each is a separate class behind an explicit argument,
+so no ordinary run can elevate the application or raise a consent dialog by accident:
+
+| Argument | What it does |
+|---|---|
+| `-e authoriseShizuku true` | Asks Shizuku to authorise BattInsight, through the official API |
+| `-e grantAccess true` | Runs the real three-permission grant sequence |
+| `-e revokeAccess true` | Removes those three permissions again |
+
+Supply `-e shizukuInstalled true|false` to give the package-visibility audit its ground
+truth; without it that case reports as skipped.
+
+Install with `adb install -r`. **Never `-g`** — it grants every requested permission, which
+silently defeats the denial paths most of these tests exist to check.
+
 ## Not yet decided
 
 The routine acquisition format (protobuf versus checkin), dependency injection, and the Room

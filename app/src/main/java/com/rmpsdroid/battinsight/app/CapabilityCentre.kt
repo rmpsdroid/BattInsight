@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -25,6 +26,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.rmpsdroid.battinsight.access.AccessMode
 import com.rmpsdroid.battinsight.capability.CapabilityFinding
 import com.rmpsdroid.battinsight.capability.CapabilityReport
 import com.rmpsdroid.battinsight.capability.CapabilityState
@@ -34,9 +36,13 @@ import com.rmpsdroid.battinsight.permissions.PermissionStatus
 /**
  * A developer-facing view of what BattInsight can currently do.
  *
- * Observation only. There are deliberately no Grant, Install or Start actions here --
- * setup belongs to Phase 4. This screen exists so that what the capability layer concludes
- * is visible and checkable.
+ * Observation, plus a way out to setup. The screen itself still changes nothing: it shows
+ * what the capability layer concluded and offers navigation to *Manage access*, where any
+ * change is made deliberately and with confirmation. Keeping the diagnostics view free of
+ * one-tap privileged actions is what stops it becoming a hidden control panel.
+ *
+ * Nothing is hidden for looking bad. Capabilities with no probe yet are listed as Unknown
+ * rather than omitted, because a missing row reads as a capability that does not exist.
  *
  * Every row states a capability, its state, and a specific reason. "Check your permissions"
  * with no detail is the message both predecessor applications shipped, and is the reason
@@ -46,7 +52,9 @@ import com.rmpsdroid.battinsight.permissions.PermissionStatus
 @Composable
 fun CapabilityCentreScreen(
     report: CapabilityReport,
+    mode: AccessMode,
     onRefresh: () -> Unit,
+    onManageAccess: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Scaffold(
@@ -80,7 +88,46 @@ fun CapabilityCentreScreen(
             modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            item { SectionHeader("Access backends") }
+            item { SectionHeader("Access") }
+            item {
+                PlainRow(
+                    title = "Access method",
+                    detail = mode.label + " · " + report.selection.reason,
+                )
+            }
+            item {
+                PlainRow(
+                    title = "Preferred backend",
+                    detail = report.selection.preferred?.displayName
+                        ?: "None chosen",
+                )
+            }
+            item {
+                PlainRow(
+                    title = "Active backend",
+                    detail = report.selection.active?.displayName
+                        ?: "None. " + report.selection.reason,
+                )
+            }
+            report.selection.fallbackOffer?.let { offer ->
+                item {
+                    PlainRow(
+                        title = "Available alternative",
+                        detail = "${offer.displayName} would work, but is not being used " +
+                            "because you chose otherwise. Change it under Manage access.",
+                    )
+                }
+            }
+            item {
+                Button(onClick = onManageAccess, modifier = Modifier.fillMaxWidth()) {
+                    Text("Manage access")
+                }
+            }
+
+            item {
+                Spacer(Modifier.height(8.dp))
+                SectionHeader("Access backends")
+            }
             items(report.backends) { BackendRow(it) }
 
             item {
@@ -111,7 +158,8 @@ fun CapabilityCentreScreen(
             item {
                 Spacer(Modifier.height(16.dp))
                 Text(
-                    text = "Observation only. Setup actions arrive in a later release.",
+                    text = "Capabilities with no probe yet are shown as Unknown rather " +
+                        "than hidden. Setup changes are made under Manage access.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

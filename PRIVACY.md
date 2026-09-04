@@ -24,11 +24,22 @@ BattInsight is **pre-release**. As of the current source:
 | **Remote data collection** | None. No data is transmitted anywhere |
 | **Accounts / sign-in** | None |
 | **Cloud backup** | Disabled. `allowBackup="false"`, and backup rules exclude every data domain |
+| **Stored on device** | One string: which access method you chose. Nothing diagnostic is persisted |
 
 An application that cannot reach the network is the strongest privacy statement available
 to a tool that reads usage history, and that is the current design.
 
 ## Data storage
+
+The only thing BattInsight stores today is **your access-method choice** — a single string
+in the application's private storage. No battery statistics, no package lists, no
+permission messages and no capability reports are written to disk.
+
+That is deliberate. Those readings describe the device *at a moment* and go stale as soon as
+anything changes; keeping them would create a second, quieter source of truth able to
+disagree with reality. Readiness is therefore always re-checked, never remembered — which is
+also why there is no "setup complete" flag that could keep claiming access you no longer
+have.
 
 Any data the application collects in future will be stored **on the device only**, in the
 application's own private storage, and will leave the device only in a file the user
@@ -52,18 +63,48 @@ Until then, no such feature exists.
 
 ## Permissions
 
-The application currently declares **no permissions at all**.
+The application declares exactly three, and **holds none of them unless you grant them**:
 
-Collecting battery statistics will eventually require three privileged permissions
-(`DUMP`, `PACKAGE_USAGE_STATS`, `INTERACT_ACROSS_USERS`), granted by the user over ADB or
-through Shizuku. They will be declared when the feature that needs them exists, and each
-will be explained in the application at the point it is requested.
+| Permission | What it allows |
+|---|---|
+| `android.permission.DUMP` | Read Android's own diagnostic reports, including the battery statistics service |
+| `android.permission.PACKAGE_USAGE_STATS` | See how long applications have been used, which the battery statistics path requires |
+| `android.permission.INTERACT_ACROSS_USERS` | Required by the battery statistics service itself, which asks across user profiles even on a single-profile device |
 
-Two permissions are deliberately excluded and would require a separate, documented
-decision to introduce:
+Declaring a permission is not holding it. None of these can be granted by an in-app prompt;
+they arrive only through ADB or a Shizuku session, and only when you ask for that.
 
+### You choose how much BattInsight holds
+
+There are two working arrangements, and they differ in what this application ends up with:
+
+- **Shizuku (recommended)** — BattInsight holds **none** of the three. The privileged work
+  happens in a process Shizuku owns, for as long as Shizuku is running.
+- **Independent access** — BattInsight holds all three, until you remove them. In exchange
+  it works without Shizuku running.
+
+BattInsight never switches between these by itself. If your chosen route stops working it
+says so and offers the alternative; taking it is your decision.
+
+You can remove the three permissions from inside the application whenever Shizuku is
+available, and it shows you the exact ADB commands when it is not.
+
+### What is deliberately not requested
+
+- `BATTERY_STATS` — **measured to be unnecessary.** Acquisition succeeded with it denied.
+  Comparable applications ask for it; this one does not.
+- `INTERACT_ACROSS_USERS_FULL` — named by Android in its own refusal message, but not
+  grantable to an ordinary application, so asking would waste your time.
 - `INTERNET` — nothing in the design needs it.
-- `QUERY_ALL_PACKAGES` — sensitive under app-store policy and avoidable.
+- `QUERY_ALL_PACKAGES` — sensitive under app-store policy, and measurement showed it is not
+  needed to detect Shizuku.
+
+### App-operations are not modified
+
+Android keeps a separate "app-op" for usage access. BattInsight **reads** it and never
+changes it: measurement showed that granting `PACKAGE_USAGE_STATS` is sufficient on its own,
+with the app-op left at its default. Changing an app-op is a heavier and less visible
+intervention than a permission you explicitly approved, so it is not done.
 
 ## Future changes
 

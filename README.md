@@ -12,10 +12,11 @@ testable analysis of battery and power behaviour.
 >
 > There is no release, and **no battery diagnostic feature works yet**.
 >
-> What exists today is the capability architecture: the application can determine which
-> access backends are usable, which permissions are held, and whether battery statistics
-> can actually be acquired in the current environment — and it shows that in a Capability
-> Centre screen. It does not yet collect, parse, store or display any battery data.
+> What exists today is the capability architecture and the access setup that feeds it: the
+> application can determine which access backends are usable, guide you through granting
+> access by whichever of three routes you prefer, and verify that battery statistics can
+> actually be acquired — and it shows all of that in a Capability Centre screen. It does
+> not yet collect, parse, store or display any battery data.
 >
 > **BattInsight is not currently a replacement for any existing battery statistics
 > application.**
@@ -51,12 +52,18 @@ that silently shows an empty screen when it lacks access is worse than one that 
 - **Shizuku availability and identity detection** — installed, running and authorised are
   three separate states, and the execution identity is measured rather than assumed
 - **Capability Centre** — a screen showing each backend, permission and capability with a
-  specific reason for its state
+  specific reason for its state, plus the preferred and active backend and why
+- **Access setup** — onboarding that offers three routes and lets you choose: live Shizuku,
+  a one-time Shizuku-assisted grant, or three ADB commands run from a computer. g is
+  granted without an explicit confirmation naming exactly what will change
+- **Access removal** — the three permissions can be removed again from inside the app when
+  Shizuku is available, or with the exact ADB commands when it is not
 - A capability model that distinguishes *available*, *available but idle*, *available but
   incomplete*, *permission missing*, *not supported by this device*, *source unavailable*,
   *execution failed* and *unknown* — because collapsing those is what produces
   uninformative empty screens
-- 81 unit tests, written against platform output captured from real measurement
+- 177 unit tests and 26 instrumented tests, written against platform output captured
+  from real measurement and validated on an Android 16 emulator
 
 **No battery diagnostics are implemented.** The application can tell you whether it *could*
 collect data; it does not yet collect, parse, store or display any.
@@ -73,12 +80,33 @@ None of the following exists yet.
 | Alarms | Alarm and scheduled-job attribution |
 | Sessions | Charge/discharge session tracking that survives reboots and process death |
 | Diagnostics | A redacted diagnostic bundle for troubleshooting |
-| ADB-granted backend | Collection using permissions granted over ADB |
-| Shizuku backend | Collection via a Shizuku shell session, needing no privileged app permissions |
 | Reports and export | Structured, machine-readable export |
 
 The roadmap deliberately puts correctness of session and snapshot handling ahead of
 features and UI.
+
+---
+
+## Access methods
+
+Battery statistics need privileged access that Android does not offer through an ordinary
+permission prompt. BattInsight supports three routes and asks you to choose; it does not
+choose for you, because they differ in what the application ends up holding.
+
+| Route | What BattInsight holds | Needs Shizuku running | Notes |
+|---|---|---|---|
+| **Shizuku (recommended)** | None of the 3 elevated Android permissions | Yes | Measured faster, and resolves application names the app UID cannot. Shizuku usually needs starting again after a reboot |
+| **Independent access** | `DUMP`, `PACKAGE_USAGE_STATS`, `INTERACT_ACROSS_USERS` until removed | No | Granted once, with Shizuku's help, then works on its own |
+| **ADB commands** | The same three permissions | No | Three commands run from a computer; no extra app required |
+
+You can also continue without setup. Detailed diagnostics are unavailable in that mode and
+the application says so rather than showing an empty screen.
+
+[Shizuku](https://shizuku.rikka.app/) is a separate, independent open-source project.
+BattInsight does not bundle, download or install it, and is not affiliated with it.
+
+`BATTERY_STATS` is deliberately **not** requested: measurement showed acquisition succeeds
+with it denied, even though comparable applications ask for it.
 
 ---
 
@@ -91,6 +119,11 @@ features and UI.
 - **Multiple access backends behind one interface.** Measurement showed an ADB-granted app
   and a Shizuku shell session produce equivalent data, so both are treated as
   interchangeable implementations rather than one being a fallback.
+- **The user chooses the security posture.** The two working routes differ in whether
+  BattInsight itself ends up holding elevated permissions, so it never switches between
+  them silently. A working alternative is offered, never applied.
+- **Flags are evidence; acquisition is proof.** Setup is reported as ready only after
+  battery statistics have actually been read, never because three permissions look granted.
 - **Empty is not failure.** A source with nothing to report and a source that is absent are
   different states and must stay distinguishable.
 - **Session correctness over cosmetics.** Historical data is never silently discarded.

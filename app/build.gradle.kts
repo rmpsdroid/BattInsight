@@ -54,6 +54,9 @@ android {
 
     buildFeatures {
         compose = true
+        // SetupAction fixes its target package at compile time; BuildConfig.APPLICATION_ID
+        // is what a test compares it against, so a rename cannot silently repoint it.
+        buildConfig = true
         // The Shizuku UserService contract is a typed Binder interface.
         aidl = true
     }
@@ -83,6 +86,8 @@ android {
 
 dependencies {
     implementation(libs.androidx.core.ktx)
+    // Stores the access-mode preference. Nothing diagnostic is ever persisted.
+    implementation(libs.androidx.datastore.preferences)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.material3)
