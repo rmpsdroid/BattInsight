@@ -53,7 +53,19 @@ import androidx.room3.PrimaryKey
             onDelete = ForeignKey.NO_ACTION,
         ),
     ],
-    indices = [Index("battery_session_id"), Index("battery_snapshot_id")],
+    indices = [
+        Index("battery_session_id"),
+        Index("battery_snapshot_id"),
+        /**
+         * The parent key that binds a capture to its session.
+         *
+         * Unique because SQLite requires a foreign key's parent columns to be uniquely
+         * indexed, and this is the parent of the composite key on [SessionCounterStateEntity].
+         * `capture_id` is already unique on its own, so this index adds no constraint that was
+         * not already true -- what it adds is the ability to reference the pair.
+         */
+        Index("battery_session_id", "capture_id", unique = true),
+    ],
 )
 data class CounterCaptureEntity(
     /**
@@ -209,6 +221,26 @@ data class PartialWakelockCounterEntity(
  * This indirection is why a first capture costs one row and not two. Baseline and latest both
  * point at the same capture until a second one arrives, so the common case stores one set of
  * counters rather than two identical sets.
+ *
+ * ## The capture keys are composite, and that is the point
+ *
+ * The obvious schema gives this table three independent foreign keys: one to the session, and
+ * one each to `counter_capture(capture_id)`. That is what Phase 7B shipped, and it is not
+ * enough. A single-column key proves the capture *exists*; it says nothing about whose it is.
+ * Session A's state row could name a capture owned by session B and every constraint would be
+ * satisfied -- producing a delta computed across two different battery sessions, which is
+ * exactly the class of silently-wrong answer this project exists to prevent.
+ *
+ * So both capture references carry the session id with them:
+ *
+ * ```
+ * (battery_session_id, baseline_capture_id) -> counter_capture(battery_session_id, capture_id)
+ * (battery_session_id, latest_capture_id)   -> counter_capture(battery_session_id, capture_id)
+ * ```
+ *
+ * `battery_session_id` appears in all three keys, so a row can only ever reference captures
+ * belonging to its own session. The database refuses the cross-session pointer; nothing is
+ * left to a Kotlin precondition that a later refactor could route around.
  */
 @Entity(
     tableName = "session_counter_state",
@@ -221,14 +253,14 @@ data class PartialWakelockCounterEntity(
         ),
         ForeignKey(
             entity = CounterCaptureEntity::class,
-            parentColumns = ["capture_id"],
-            childColumns = ["baseline_capture_id"],
+            parentColumns = ["battery_session_id", "capture_id"],
+            childColumns = ["battery_session_id", "baseline_capture_id"],
             onDelete = ForeignKey.NO_ACTION,
         ),
         ForeignKey(
             entity = CounterCaptureEntity::class,
-            parentColumns = ["capture_id"],
-            childColumns = ["latest_capture_id"],
+            parentColumns = ["battery_session_id", "capture_id"],
+            childColumns = ["battery_session_id", "latest_capture_id"],
             onDelete = ForeignKey.NO_ACTION,
         ),
     ],

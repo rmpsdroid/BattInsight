@@ -193,6 +193,57 @@ class CounterMigrationTest {
         db.close()
     }
 
+    /**
+     * The migrated database binds a state row to its own session's captures.
+     *
+     * The composite foreign keys have to survive the migration, not merely exist in the
+     * entities. A single-column key would prove a capture exists and say nothing about whose
+     * it is, which would let a delta be computed across two battery sessions.
+     */
+    @Test
+    fun aMigratedDatabaseRefusesACrossSessionPointer() = runBlocking {
+        helper.createDatabase(1).use { v1 ->
+            v1.execSQL(SNAPSHOT_INSERT)
+            v1.execSQL(SESSION_INSERT)
+            v1.execSQL(SECOND_SESSION_INSERT)
+        }
+        helper.runMigrationsAndValidate(2, listOf(MIGRATION_1_2)).close()
+
+        val db = Room.databaseBuilder(
+            InstrumentationRegistry.getInstrumentation().targetContext,
+            BattInsightDatabase::class.java,
+            TEST_DB,
+        ).addMigrations(MIGRATION_1_2).build()
+
+        db.useWriterConnection { connection ->
+            // A capture owned by the second session.
+            connection.exec(captureInsert("cap-b", SECOND_SESSION_ID))
+
+            val refused = runCatching {
+                connection.exec(
+                    "INSERT INTO session_counter_state " +
+                        "(battery_session_id, baseline_capture_id, latest_capture_id) " +
+                        "VALUES ('" + SESSION_ID + "', 'cap-b', 'cap-b')",
+                )
+            }
+            assertTrue(
+                "session A must not be able to claim session B's capture",
+                refused.isFailure,
+            )
+
+            // The legitimate case still works, so the constraint is not refusing everything.
+            connection.exec(captureInsert("cap-a", SESSION_ID))
+            connection.exec(
+                "INSERT INTO session_counter_state " +
+                    "(battery_session_id, baseline_capture_id, latest_capture_id) " +
+                    "VALUES ('" + SESSION_ID + "', 'cap-a', 'cap-a')",
+            )
+        }
+
+        assertEquals("cap-a", db.counterDao().state(SESSION_ID)!!.baselineCaptureId)
+        db.close()
+    }
+
     // ------------------------------------------------------------------------ helpers
 
     private suspend fun PooledConnection.exec(sql: String) {
@@ -211,8 +262,21 @@ class CounterMigrationTest {
     private fun SQLiteConnection.textOf(sql: String): String? =
         prepare(sql).use { if (it.step()) it.getText(0) else null }
 
+    private fun captureInsert(captureId: String, sessionId: String) =
+        "INSERT INTO counter_capture " +
+            "(capture_id, battery_session_id, battery_snapshot_id, source_format, " +
+            " source_format_version, backend_kind, record_format_version, checkin_version, " +
+            " parcel_version, platform_start_fingerprint, platform_end_fingerprint, " +
+            " platform_changed, capture_elapsed_realtime_millis, capture_wall_clock_millis, " +
+            " counter_generation, boot_kind, boot_kernel_id, boot_derived_millis, " +
+            " payload_byte_count, payload_hash, warning_count, checkin_version_verified) " +
+            "VALUES ('" + captureId + "', '" + sessionId + "', NULL, 'CHECKIN', 9, 'SHELL', " +
+            " 9, 36, 215, 'BUILD.A', 'BUILD.A', 0, 1000, 1700000000000, 1, 'KERNEL', " +
+            " 'boot-x', NULL, 900000, NULL, 0, 1)"
+
     private companion object {
         const val TEST_DB = "counter-migration-test.db"
+        const val SECOND_SESSION_ID = "33333333-3333-3333-3333-333333333333"
         const val SESSION_ID = "11111111-1111-1111-1111-111111111111"
         const val SNAPSHOT_ID = "22222222-2222-2222-2222-222222222222"
 
@@ -234,6 +298,13 @@ class CounterMigrationTest {
                 (session_id, session_type, start_snapshot_id, latest_snapshot_id,
                  end_snapshot_id, end_reason, counter_generation)
             VALUES ('$SESSION_ID', 'DISCHARGE', '$SNAPSHOT_ID', '$SNAPSHOT_ID', NULL, 'NONE', 3)
+        """.trimIndent()
+
+        val SECOND_SESSION_INSERT = """
+            INSERT INTO battery_sessions
+                (session_id, session_type, start_snapshot_id, latest_snapshot_id,
+                 end_snapshot_id, end_reason, counter_generation)
+            VALUES ('$SECOND_SESSION_ID', 'CHARGE', '$SNAPSHOT_ID', '$SNAPSHOT_ID', NULL, 'NONE', 3)
         """.trimIndent()
 
         val ENGINE_STATE_INSERT = """

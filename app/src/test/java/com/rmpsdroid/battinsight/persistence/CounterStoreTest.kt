@@ -401,6 +401,98 @@ class CounterStoreTest {
         assertNotEquals("only the recorded provenance differs", viaShell.backendKind, viaApp.backendKind)
     }
 
+    // -------------------------------------------------- cross-session ownership
+
+    /**
+     * A session's state row cannot point at another session's capture.
+     *
+     * Phase 7B enforced this only by construction: the store always wrote a capture and a
+     * state row for the same session, so nothing wrong ever happened. But the schema permitted
+     * it -- three independent single-column foreign keys prove a capture *exists* and say
+     * nothing about whose it is -- and a delta computed across two battery sessions is exactly
+     * the kind of confidently-wrong answer this project exists to prevent.
+     *
+     * The keys are now composite, carrying the session id alongside the capture id, so the
+     * database refuses it. These tests go around the store and write through the DAO directly,
+     * because the point is that the *constraint* holds, not that the store is careful.
+     */
+    @Test
+    fun `a baseline pointer into another session is refused by the database`() = runTest {
+        seedSession(SESSION_A)
+        seedSession(SESSION_B)
+        store.store(capture(kwl = listOf(kwl("a", 10L, 1L))), SESSION_A, null, GEN, BOOT, "cap-a")
+        store.store(capture(kwl = listOf(kwl("b", 20L, 2L))), SESSION_B, null, GEN, BOOT, "cap-b")
+        val beforeA = store.state(SESSION_A)!!
+        val beforeB = store.state(SESSION_B)!!
+        val rowsBefore = store.counterRowCounts()
+
+        val refused = runCatching {
+            db.counterDao().upsertState(
+                SessionCounterStateEntity(
+                    batterySessionId = SESSION_A,
+                    baselineCaptureId = "cap-b", // belongs to session B
+                    latestCaptureId = "cap-a",
+                ),
+            )
+        }
+
+        assertTrue("the database must refuse it", refused.isFailure)
+        val afterA = store.state(SESSION_A)!!
+        assertEquals("session A's baseline is untouched", beforeA.baseline.captureId, afterA.baseline.captureId)
+        assertEquals(beforeA.latest.captureId, afterA.latest.captureId)
+        assertEquals("session B is untouched", beforeB.baseline.captureId, store.state(SESSION_B)!!.baseline.captureId)
+        assertNotNull("and B's capture still exists", db.counterDao().capture("cap-b"))
+        assertEquals("no counter rows were disturbed", rowsBefore, store.counterRowCounts())
+    }
+
+    @Test
+    fun `a latest pointer into another session is refused by the database`() = runTest {
+        seedSession(SESSION_A)
+        seedSession(SESSION_B)
+        store.store(capture(kwl = listOf(kwl("a", 10L, 1L))), SESSION_A, null, GEN, BOOT, "cap-a")
+        store.store(capture(kwl = listOf(kwl("b", 20L, 2L))), SESSION_B, null, GEN, BOOT, "cap-b")
+        val beforeA = store.state(SESSION_A)!!
+
+        val refused = runCatching {
+            db.counterDao().upsertState(
+                SessionCounterStateEntity(
+                    batterySessionId = SESSION_A,
+                    baselineCaptureId = "cap-a",
+                    latestCaptureId = "cap-b", // belongs to session B
+                ),
+            )
+        }
+
+        assertTrue("the database must refuse it", refused.isFailure)
+        assertEquals(beforeA.latest.captureId, store.state(SESSION_A)!!.latest.captureId)
+        assertNotNull(db.counterDao().capture("cap-b"))
+    }
+
+    @Test
+    fun `a state row naming a capture that does not exist at all is refused`() = runTest {
+        seedSession(SESSION_A)
+        store.store(capture(), SESSION_A, null, GEN, BOOT, "cap-a")
+
+        val refused = runCatching {
+            db.counterDao().upsertState(
+                SessionCounterStateEntity(SESSION_A, "no-such-capture", "cap-a"),
+            )
+        }
+        assertTrue(refused.isFailure)
+    }
+
+    /** The legitimate case still works, so the constraint is not simply refusing everything. */
+    @Test
+    fun `pointers within the same session are accepted`() = runTest {
+        seedSession(SESSION_A)
+        store.store(capture(), SESSION_A, null, GEN, BOOT, "cap-1")
+        store.store(capture(elapsed = 61_000L), SESSION_A, null, GEN, BOOT, "cap-2")
+
+        val state = store.state(SESSION_A)!!
+        assertEquals("cap-1", state.baseline.captureId)
+        assertEquals("cap-2", state.latest.captureId)
+    }
+
     // ------------------------------------------------------------------------ helpers
 
     /** A battery session must exist before counters can reference it. */

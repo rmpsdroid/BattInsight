@@ -20,9 +20,15 @@ import androidx.sqlite.execSQL
 /**
  * Adds durable counter storage. Purely additive.
  *
- * Four new tables and their indices. Not one statement touches `battery_sessions`,
- * `battery_snapshots` or `engine_state`: a device upgrading from v1 keeps every session and
- * snapshot it had, and simply gains empty counter tables.
+ * Four new tables and their indices. The two capture references on `session_counter_state`
+ * are **composite**, carrying the session id alongside the capture id, so a state row can only
+ * ever point at captures belonging to its own battery session. A single-column key would prove
+ * only that the capture exists, not whose it is, and would let a delta be computed across two
+ * different sessions.
+ *
+ * Not one statement touches `battery_sessions`, `battery_snapshots` or `engine_state`: a
+ * device upgrading from v1 keeps every session and snapshot it had, and simply gains empty
+ * counter tables.
  *
  * The SQL is written to match what Room generates for the entities exactly -- column order,
  * types, nullability, foreign keys and index names. Room validates the result against the
@@ -70,6 +76,14 @@ val MIGRATION_1_2 = object : Migration(1, 2) {
         connection.execSQL(
             "CREATE INDEX IF NOT EXISTS `index_counter_capture_battery_snapshot_id` " +
                 "ON `counter_capture` (`battery_snapshot_id`)",
+        )
+        // The parent key for session_counter_state's composite references. Unique because
+        // SQLite requires a foreign key's parent columns to be uniquely indexed; capture_id
+        // is already unique alone, so this constrains nothing new.
+        connection.execSQL(
+            "CREATE UNIQUE INDEX IF NOT EXISTS " +
+                "`index_counter_capture_battery_session_id_capture_id` " +
+                "ON `counter_capture` (`battery_session_id`, `capture_id`)",
         )
 
         connection.execSQL(
@@ -120,9 +134,11 @@ val MIGRATION_1_2 = object : Migration(1, 2) {
                 PRIMARY KEY(`battery_session_id`),
                 FOREIGN KEY(`battery_session_id`) REFERENCES `battery_sessions`(`session_id`)
                     ON UPDATE NO ACTION ON DELETE NO ACTION,
-                FOREIGN KEY(`baseline_capture_id`) REFERENCES `counter_capture`(`capture_id`)
+                FOREIGN KEY(`battery_session_id`, `baseline_capture_id`)
+                    REFERENCES `counter_capture`(`battery_session_id`, `capture_id`)
                     ON UPDATE NO ACTION ON DELETE NO ACTION,
-                FOREIGN KEY(`latest_capture_id`) REFERENCES `counter_capture`(`capture_id`)
+                FOREIGN KEY(`battery_session_id`, `latest_capture_id`)
+                    REFERENCES `counter_capture`(`battery_session_id`, `capture_id`)
                     ON UPDATE NO ACTION ON DELETE NO ACTION
             )
             """.trimIndent(),
