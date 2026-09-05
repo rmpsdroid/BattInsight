@@ -389,3 +389,27 @@ individually disposable; a capture may be the only record that Android's counter
 oldest-first, so the greatest deleted elapsed time sits strictly below the oldest retained
 sample, and the read model can tell that the space before the series once held data. An earlier
 draft recorded the oldest *retained* value and the gap test could never fire.
+
+### Counter mutations are serialised
+
+Storing a capture is read the topology, plan an eviction, apply the plan — and the plan is only
+true of the topology it was computed against. Two concurrent callers can both read the same
+state, both plan against it, and both apply, leaving the second plan stale and able to join two
+captures that must never be subtracted.
+
+`CounterMutationLock` is a process-wide `Mutex` covering the **complete read → plan → apply**
+sequence, plus both clear paths. Wrapping only the write transaction would not help: by then
+the stale plan has already been handed over.
+
+Process-wide rather than per-instance because there is already more than one `RoomCounterStore`
+— the view model owns one and `RoomSessionHistoryRepository` builds another. That second one
+only reads today, but "only one class writes" is an observation about the call graph, not a
+guarantee.
+
+Battery samples need none of this: their retention is "delete the oldest n", computed and
+applied inside one Room `@Transaction` with no separate read phase.
+
+A related correction: `latest_capture_id` now means the newest *reading*, not the most recently
+written row. In production those coincide because captures are taken one after another, but
+that is timing rather than a guarantee, and a capture arriving late with an older timestamp
+must not become the latest — the whole-session delta is measured baseline → latest.

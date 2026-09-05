@@ -12,9 +12,9 @@ Measured on a real Android 16 capture during the Phase 9A research:
 |---|---:|---|
 | one battery reading | **343 bytes** | every 5 minutes while the UI is visible |
 | one full counter capture (repeated text) | 103.8 KB | — |
-| one counter capture (interned, as shipped) | **25.0 KB** | only when the user asks |
+| one counter capture (interned, as shipped) | **~46 KB** at the retention target | only when the user asks |
 
-A counter capture costs roughly **300×** a battery reading and takes about 1.15 s of privileged
+A counter capture costs well over **100×** a battery reading and takes about 1.15 s of privileged
 work. Sampling both on one cadence would waste either resolution or storage by two orders of
 magnitude, so they are separate tables with separate triggers and separate retention.
 
@@ -39,6 +39,13 @@ added — `lifecycle-runtime-ktx` was already present.
 
 **The consequence is accepted rather than hidden.** The series will have large gaps covering
 most of every day. They are rendered as gaps.
+
+**Measured, not assumed.** `tools/series-lifecycle-proof.sh` presses HOME so the Activity
+reaches `onStop` while the process keeps running, then waits 380 seconds — longer than one
+300-second production cadence. The pid is recorded before and after and must match, so "no
+samples appeared" cannot be explained away by the process having died. Result: same pid, zero
+new samples. A separate step force-stops the app and shows the samples either side of a real
+process death survive with an unobserved interval between them.
 
 ### What produces a sample
 
@@ -126,12 +133,32 @@ labels. With 408 partial rows per capture, roughly 32 KB of identical text was b
 every time. `wakelock_identity` stores each `(family, uid, name)` once; counter rows reference
 an integer.
 
-Measured: **103.8 KB → 25.0 KB per capture, a 4.15× reduction that discards nothing.** Every
-alternative considered (sparse checkpoints, interval deltas, top-N) bought less by throwing
-information away.
+Measured against the shipped schema, like for like:
+
+| retained captures | repeated text | interned | reduction |
+|---:|---:|---:|---:|
+| 8 (the target) | 856 KB | 368 KB | **2.33×** |
+| 24 | 2456 KB | 784 KB | **3.13×** |
+| 288 | 29440 KB | 8216 KB | 3.58× |
+
+Per capture at the retention target: **107 KB → 46 KB.** Every alternative considered (sparse
+checkpoints, interval deltas, top-N) bought less by throwing information away.
+
+An earlier figure of 4.15× was withdrawn in Phase 9B.1: the prototypes it came from did not
+carry the same indices, so part of that saving was index removal rather than interning, and it
+was measured at 288 captures — an operating point the retention target makes unreachable.
 
 `AUTOINCREMENT` is load-bearing: identities are swept, and without it SQLite would reuse a
 deleted rowid and silently relabel a different wakelock.
+
+**One index, chosen by measurement.** The counter tables carry `INDEX(identity_id)` and nothing
+else. A separate `INDEX(capture_id)` was removed in Phase 9B.1: the primary key is
+`(capture_id, accounting_window, identity_id)`, so SQLite already serves the by-capture query
+from the primary-key index with the same plan and the same measured time, while the extra index
+cost 17–20% of these tables. The identity index was narrowed from `(identity_id, capture_id)`
+to `(identity_id)` for the same reason — no slower at any retained size, 8–14% smaller. Dropping
+it entirely was measured too and rejected: the planner falls back to a skip-scan and the
+identity-series query becomes 1.2–1.7× slower.
 
 ### This dictionary is not harmless metadata
 
