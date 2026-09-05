@@ -150,6 +150,12 @@ dependencies {
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.room3.testing)
+    // Compose UI tests run on a device: they need a real composition, a real layout pass and
+    // real semantics, none of which Robolectric's shadows reproduce faithfully enough to
+    // trust for accessibility assertions.
+    androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
 }
 
 /**

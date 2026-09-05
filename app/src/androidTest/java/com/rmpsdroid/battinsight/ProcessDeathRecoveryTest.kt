@@ -18,6 +18,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -103,8 +104,12 @@ class ProcessDeathRecoveryTest {
      */
     @Test
     fun resumeSession(): Unit = runBlocking {
-        val expected = InstrumentationRegistry.getArguments().getString("expectedSessionId")
-            ?: error("expectedSessionId must be supplied; run tools/process-death-proof.sh")
+        // Skips rather than fails when the harness did not supply it: this half is
+        // meaningless without the process kill that tools/process-death-proof.sh performs,
+        // and a suite that is expected to be red teaches people to ignore red.
+        val expectedOrNull = InstrumentationRegistry.getArguments().getString("expectedSessionId")
+        assumeTrue("expectedSessionId not supplied; run tools/process-death-proof.sh", expectedOrNull != null)
+        val expected = expectedOrNull!!
 
         Log.i(TAG, "$PID_MARKER${android.os.Process.myPid()}")
         val (coordinator, store) = coordinator()
