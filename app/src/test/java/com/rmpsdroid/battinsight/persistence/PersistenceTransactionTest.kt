@@ -391,6 +391,8 @@ internal class DroppingSnapshotDao(private val real: SessionDao) : SessionDao {
     override suspend fun upsertSessions(sessions: List<SessionEntity>) = real.upsertSessions(sessions)
     override suspend fun upsertEngineState(state: EngineStateEntity) = real.upsertEngineState(state)
     override suspend fun deleteEngineState() = real.deleteEngineState()
+    override suspend fun deleteSessionCounterState() = real.deleteSessionCounterState()
+    override suspend fun deleteCounterCaptures() = real.deleteCounterCaptures()
     override suspend fun deleteSessions() = real.deleteSessions()
     override suspend fun deleteSnapshots() = real.deleteSnapshots()
 }

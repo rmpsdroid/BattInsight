@@ -113,7 +113,19 @@ interface SessionStateStore {
      */
     suspend fun saveState(state: SessionEngineState): PersistenceResult
 
-    /** Forgets everything. Used when saved state is established to be inconsistent. */
+    /**
+     * Forgets everything BattInsight durably stores about battery history.
+     *
+     * Used when saved state is established to be inconsistent. For the Room implementation
+     * that means engine state, sessions, snapshots, counter captures, their wakelock rows and
+     * session counter state -- in one transaction, all or nothing.
+     *
+     * It is deliberately confined to this application's own database. It does not reset
+     * Android's batterystats, change Shizuku, revoke a permission, touch app-ops, alter
+     * battery state, or clear the access preference, which lives in its own DataStore and
+     * survives this call. Clearing diagnostic history must never cost the user their access
+     * setup.
+     */
     suspend fun clear(): PersistenceResult
 }
 

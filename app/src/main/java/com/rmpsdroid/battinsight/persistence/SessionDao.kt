@@ -72,6 +72,17 @@ interface SessionDao {
     @Query("DELETE FROM engine_state")
     suspend fun deleteEngineState()
 
+    // The two counter statements below also exist on CounterDao, which owns the narrower
+    // "forget the counters, keep the history" operation. They are repeated here rather than
+    // delegated because Room DAOs cannot call one another, and a full clear has to be a
+    // single transaction -- see clearAll().
+
+    @Query("DELETE FROM session_counter_state")
+    suspend fun deleteSessionCounterState()
+
+    @Query("DELETE FROM counter_capture")
+    suspend fun deleteCounterCaptures()
+
     @Query("DELETE FROM battery_sessions")
     suspend fun deleteSessions()
 
@@ -101,15 +112,37 @@ interface SessionDao {
     }
 
     /**
-     * Removes every stored session, snapshot and engine-state row.
+     * Removes every row BattInsight durably owns: engine state, counter state, counter
+     * captures and their wakelock rows, sessions and snapshots.
      *
-     * One transaction, and in dependency order: engine state first, then the sessions it
-     * referenced, then the snapshots those referenced. Immediate constraints would refuse
-     * any other order, which is the schema doing its job.
+     * One transaction, in dependency order derived from the schema rather than from memory.
+     * Every foreign key in this database is NO ACTION and therefore immediate, so a child row
+     * outliving its parent is not a tidiness problem -- it aborts the delete outright:
+     *
+     * ```
+     * engine_state             -> battery_sessions, battery_snapshots
+     * session_counter_state    -> battery_sessions, counter_capture
+     * counter_capture          -> battery_sessions
+     * kernel_wakelock_counter  -> counter_capture   (CASCADE)
+     * partial_wakelock_counter -> counter_capture   (CASCADE)
+     * battery_sessions         -> battery_snapshots
+     * battery_snapshots        -> (none)
+     * ```
+     *
+     * The two wakelock tables are not deleted explicitly. They are the only children in this
+     * schema declared CASCADE, so removing their capture removes them, and the regression test
+     * asserts they reach zero rather than trusting that.
+     *
+     * This method deleted only the first, second-to-last and last of those tables until the
+     * Phase 8 audit: Phase 6 wrote it before the counter tables existed, and Phase 7B added
+     * four tables pointing at `battery_sessions` without revisiting it. A clear then failed
+     * with FOREIGN KEY constraint failed as soon as one counter capture existed.
      */
     @Transaction
     suspend fun clearAll() {
         deleteEngineState()
+        deleteSessionCounterState()
+        deleteCounterCaptures()
         deleteSessions()
         deleteSnapshots()
     }
