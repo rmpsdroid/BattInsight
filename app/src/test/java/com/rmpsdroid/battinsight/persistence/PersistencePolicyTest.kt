@@ -127,4 +127,94 @@ class PersistencePolicyTest {
         val expected = (1..BattInsightDatabase.DATABASE_VERSION).toSet()
         assertEquals("exported schemas must be contiguous", expected, expected intersect present)
     }
+
+    /**
+     * The delta engine stays pure.
+     *
+     * Comparison policy is the part of this phase most worth testing exhaustively, and it is
+     * only cheap to test while it has no database dependency. One convenient import would end
+     * that, so the seam is asserted rather than intended.
+     */
+    @Test
+    fun `the batterystats package imports no Room or database machinery`() {
+        val banned = listOf("androidx.room", "androidx.room3", "android.database", "battinsight.persistence")
+        val sources = File(moduleDir, "src/main/java/com/rmpsdroid/battinsight/batterystats")
+            .walkTopDown().filter { it.isFile && it.extension == "kt" }
+
+        val violations = sources.flatMap { file ->
+            file.readLines()
+                .filter { line -> line.startsWith("import ") && banned.any { line.contains(it) } }
+                .map { "${file.name}: ${it.trim()}" }
+        }.toList()
+
+        assertEquals(
+            "the decoder and delta engine must remain testable without a device",
+            emptyList<String>(),
+            violations,
+        )
+    }
+
+    /**
+     * No column anywhere holds a privileged payload.
+     *
+     * The privacy claim this project makes is that the raw batterystats output is decoded and
+     * discarded. A column named for it would be the quiet way that stops being true, so the
+     * entity definitions are read rather than trusted.
+     */
+    @Test
+    fun `no entity declares a raw payload column`() {
+        val banned = listOf("payload_text", "raw_payload", "payload_body", "stdout", "raw_output")
+        val entities = File(moduleDir, "src/main/java/com/rmpsdroid/battinsight/persistence")
+            .walkTopDown().filter { it.isFile && it.name.endsWith("Entities.kt") }
+
+        val violations = entities.flatMap { file ->
+            file.readLines().filter { line -> banned.any { line.contains(it) } }
+                .map { "${file.name}: ${it.trim()}" }
+        }.toList()
+
+        assertEquals(emptyList<String>(), violations)
+
+        // And the one payload-shaped column that does exist holds a digest, not content.
+        val counterEntities = File(
+            moduleDir, "src/main/java/com/rmpsdroid/battinsight/persistence/CounterEntities.kt",
+        ).readText()
+        assertTrue(
+            "payload_hash is a digest and payload_byte_count is a size; neither is content",
+            counterEntities.contains("payload_hash") && counterEntities.contains("payload_byte_count"),
+        )
+    }
+
+    /**
+     * Package names are not persisted alongside counters.
+     *
+     * A numeric UID is a far weaker statement about a person's device than a durable list of
+     * the applications on it. The decoder still reads `uid` records for live display; nothing
+     * writes them to disk, and this asserts the counter tables have no column for them.
+     */
+    @Test
+    fun `no counter table stores a package name`() {
+        val counterEntities = File(
+            moduleDir, "src/main/java/com/rmpsdroid/battinsight/persistence/CounterEntities.kt",
+        ).readText()
+
+        listOf("package_name", "packageName", "uid_package").forEach {
+            assertTrue(
+                "counter storage must not carry package attribution: found '$it'",
+                !counterEntities.contains(it),
+            )
+        }
+    }
+
+    /**
+     * Every shipped database version keeps its exported schema.
+     *
+     * Deleting an old one would delete the only evidence a migration can be validated against.
+     */
+    @Test
+    fun `schema one and schema two are both committed`() {
+        val dir = File(moduleDir, "schemas/com.rmpsdroid.battinsight.persistence.BattInsightDatabase")
+        assertTrue("schema 1 must not be deleted when 2 arrives", File(dir, "1.json").isFile)
+        assertTrue(File(dir, "2.json").isFile)
+        assertEquals(2, BattInsightDatabase.DATABASE_VERSION)
+    }
 }
