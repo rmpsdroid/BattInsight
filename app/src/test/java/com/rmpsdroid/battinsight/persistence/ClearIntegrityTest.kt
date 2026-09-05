@@ -53,6 +53,7 @@ class ClearIntegrityTest {
     private lateinit var db: BattInsightDatabase
     private lateinit var store: SessionStateStore
     private lateinit var counters: RoomCounterStore
+    private lateinit var sampleStore: RoomBatterySampleStore
 
     @Before
     fun setUp() {
@@ -61,6 +62,7 @@ class ClearIntegrityTest {
         // contract, not about a Room implementation detail, and production calls it here.
         store = RoomSessionStateStore(db.sessionDao())
         counters = RoomCounterStore(db.counterDao())
+        sampleStore = RoomBatterySampleStore(db.batterySampleDao())
     }
 
     @After
@@ -79,6 +81,8 @@ class ClearIntegrityTest {
         assertTrue("kernel_wakelock_counter seeded", count("kernel_wakelock_counter") > 0)
         assertTrue("partial_wakelock_counter seeded", count("partial_wakelock_counter") > 0)
         assertEquals("engine_state seeded", 1L, count("engine_state"))
+        assertTrue("battery_sample seeded", count("battery_sample") > 0)
+        assertTrue("wakelock_identity seeded", count("wakelock_identity") > 0)
         assertEquals("battery_sessions seeded", 1L, count("battery_sessions"))
         assertTrue("battery_snapshots seeded", count("battery_snapshots") > 0)
 
@@ -133,6 +137,8 @@ class ClearIntegrityTest {
         assertEquals("counter state gone", 0L, count("session_counter_state"))
         assertEquals("kernel rows gone", 0L, count("kernel_wakelock_counter"))
         assertEquals("partial rows gone", 0L, count("partial_wakelock_counter"))
+        assertEquals("orphan identities go with them", 0L, count("wakelock_identity"))
+        assertEquals("but the battery series survives", 3L, count("battery_sample"))
         assertEquals("but the session survives", 1L, count("battery_sessions"))
         assertEquals("and so does engine state", 1L, count("engine_state"))
         assertTrue("and its snapshots", count("battery_snapshots") > 0)
@@ -257,6 +263,26 @@ class ClearIntegrityTest {
             bootIdentity = BOOT,
             newCaptureId = "cap-baseline",
         )
+        repeat(3) { i ->
+            sampleStore.record(
+                SESSION,
+                com.rmpsdroid.battinsight.session.BatteryObservation(
+                    time = com.rmpsdroid.battinsight.session.CaptureTime(
+                        com.rmpsdroid.battinsight.session.ElapsedRealtime(1_000L + i * 1_000L),
+                        EPOCH + i * 1_000L,
+                        330,
+                    ),
+                    bootIdentity = BOOT,
+                    status = com.rmpsdroid.battinsight.session.BatteryStatus.DISCHARGING,
+                    plug = com.rmpsdroid.battinsight.session.PlugSource.NONE,
+                    level = 73,
+                    scale = 100,
+                ),
+                com.rmpsdroid.battinsight.session.SessionTrigger.PERIODIC,
+                CounterGeneration(3),
+            )
+        }
+
         counters.store(
             capture = capture(
                 elapsed = 61_000L,
@@ -314,8 +340,10 @@ class ClearIntegrityTest {
             "kernel_wakelock_counter",
             "partial_wakelock_counter",
             "counter_capture",
+            "battery_sample",
             "battery_sessions",
             "battery_snapshots",
+            "wakelock_identity",
         )
     }
 }

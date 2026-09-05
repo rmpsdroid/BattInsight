@@ -174,12 +174,13 @@ class PersistenceRoundTripTest {
         )
 
         assertEquals(schema, out.lastAccepted!!.schemaVersion)
-        // They started in step and no longer are: Phase 7B took the Room schema to 2 by
-        // adding counter tables, while the snapshot model did not change at all. That
+        // They started in step and have diverged twice: Phase 7B took the Room schema to 2 by
+        // adding counter tables, and Phase 9B took it to 3 by adding the sampled series and
+        // interning wakelock identities. The snapshot model did not change either time. That
         // divergence is the point of this test rather than a problem with it -- storing one
         // and inferring the other would couple two independent version domains.
         assertEquals(1, schema.value)
-        assertEquals(2, BattInsightDatabase.DATABASE_VERSION)
+        assertEquals(3, BattInsightDatabase.DATABASE_VERSION)
         assertNotEquals(
             "the two version domains have now demonstrably separated",
             schema.value,
