@@ -5,6 +5,7 @@ import com.rmpsdroid.battinsight.collection.SourceFormat
 import com.rmpsdroid.battinsight.session.BootIdentity
 import com.rmpsdroid.battinsight.session.CounterGeneration
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -308,17 +309,156 @@ class CounterDeltaEngineTest {
         )
     }
 
+    /**
+     * One decrease condemns the pair, including the counters that still look fine.
+     *
+     * The case the reviewer named, and the reason the earlier per-counter handling was not
+     * conservative enough:
+     *
+     * ```
+     * baseline   A = 100   B = 5
+     * latest     A =  50   B = 10
+     * ```
+     *
+     * A is visibly broken. B's +5 is not a session delta -- it is 10 accumulated since the
+     * accounting restarted, measured against 5 from before it. The old behaviour dropped A and
+     * happily reported B.
+     */
     @Test
-    fun `a decreasing counter is excluded from the list rather than poisoning it`() {
+    fun `a decrease in one counter refuses the whole pair, including the positive ones`() {
         val state = state(
-            baselineKwl = listOf(kwl("good", 100L, 1L), kwl("reset", 5_000L, 50L)),
-            latestKwl = listOf(kwl("good", 300L, 3L), kwl("reset", 10L, 1L)),
+            baselineKwl = listOf(kwl("A", 100L, 10L), kwl("B", 5L, 1L)),
+            latestKwl = listOf(kwl("A", 50L, 5L), kwl("B", 10L, 2L)),
+        )
+
+        val list = CounterDeltaEngine.kernelWakelockDeltas(state)
+        assertEquals(
+            CounterDeltaReason.COUNTER_DECREASED,
+            (list as CounterDeltaResult.NotComparable).reason,
+        )
+        assertNull("no delta list may be exposed at all", list.valueOrNull)
+
+        // And B must not be obtainable through the single-counter route either.
+        val b = CounterDeltaEngine.kernelWakelockDelta(state, WINDOW, "B")
+        assertTrue("B looked like a clean +5 and is not", !b.succeeded)
+        assertEquals(
+            CounterDeltaReason.COUNTER_DECREASED,
+            (b as CounterDeltaResult.NotComparable).reason,
+        )
+    }
+
+    /** The same, for application wakelocks. */
+    @Test
+    fun `a decrease in one partial wakelock refuses the whole pair`() {
+        val state = state(
+            baselinePwl = listOf(pwl(1000, "A", 100L, 10L), pwl(1000, "B", 5L, 1L)),
+            latestPwl = listOf(pwl(1000, "A", 50L, 5L), pwl(1000, "B", 10L, 2L)),
+        )
+
+        val list = CounterDeltaEngine.partialWakelockDeltas(state)
+        assertEquals(
+            CounterDeltaReason.COUNTER_DECREASED,
+            (list as CounterDeltaResult.NotComparable).reason,
+        )
+        assertTrue(!CounterDeltaEngine.partialWakelockDelta(state, WINDOW, 1000, "B").succeeded)
+    }
+
+    /**
+     * A decrease in one family refuses the other family too.
+     *
+     * Both come from one batterystats accounting capture. A kernel wakelock going backwards
+     * says that capture's accounting restarted; it says nothing reassuring about the
+     * application wakelocks sitting beside it in the same payload.
+     */
+    @Test
+    fun `a kernel decrease refuses the app wakelock deltas as well`() {
+        val state = state(
+            baselineKwl = listOf(kwl("kernel", 100L, 10L)),
+            latestKwl = listOf(kwl("kernel", 50L, 5L)),
+            baselinePwl = listOf(pwl(1000, "app", 5L, 1L)),
+            latestPwl = listOf(pwl(1000, "app", 10L, 2L)),
+        )
+
+        assertEquals(
+            CounterDeltaReason.COUNTER_DECREASED,
+            (CounterDeltaEngine.partialWakelockDeltas(state) as CounterDeltaResult.NotComparable).reason,
+        )
+        assertEquals(
+            CounterDeltaReason.COUNTER_DECREASED,
+            (CounterDeltaEngine.kernelWakelockDeltas(state) as CounterDeltaResult.NotComparable).reason,
+        )
+    }
+
+    /** And the reverse direction. */
+    @Test
+    fun `an app wakelock decrease refuses the kernel deltas as well`() {
+        val state = state(
+            baselineKwl = listOf(kwl("kernel", 5L, 1L)),
+            latestKwl = listOf(kwl("kernel", 10L, 2L)),
+            baselinePwl = listOf(pwl(1000, "app", 100L, 10L)),
+            latestPwl = listOf(pwl(1000, "app", 50L, 5L)),
+        )
+
+        assertEquals(
+            CounterDeltaReason.COUNTER_DECREASED,
+            (CounterDeltaEngine.kernelWakelockDeltas(state) as CounterDeltaResult.NotComparable).reason,
+        )
+    }
+
+    /** The refusal names the counter that broke, so a bug report can start somewhere. */
+    @Test
+    fun `the refusal identifies which counter lost continuity`() {
+        val state = state(
+            baselineKwl = listOf(kwl("bt_read_wake_lock", 100L, 10L)),
+            latestKwl = listOf(kwl("bt_read_wake_lock", 50L, 5L)),
+        )
+
+        val detail = (CounterDeltaEngine.kernelWakelockDeltas(state)
+            as CounterDeltaResult.NotComparable).detail
+        assertTrue("names the counter: $detail", detail.contains("bt_read_wake_lock"))
+        assertTrue("and says the others are untrustworthy too", detail.contains("none of them"))
+    }
+
+    /**
+     * A decrease does not become a generation change or a new baseline.
+     *
+     * The evidence proves discontinuity, not its cause. Reporting it as
+     * DIFFERENT_COUNTER_GENERATION would be claiming to know Android reset its counters, which
+     * a decrease alone does not establish.
+     */
+    @Test
+    fun `a decrease is reported as a decrease, not as a generation change`() {
+        val state = state(
+            baselineKwl = listOf(kwl("k", 100L, 10L)),
+            latestKwl = listOf(kwl("k", 50L, 5L)),
+        )
+
+        val reason = (CounterDeltaEngine.kernelWakelockDeltas(state)
+            as CounterDeltaResult.NotComparable).reason
+        assertEquals(CounterDeltaReason.COUNTER_DECREASED, reason)
+        assertNotEquals(CounterDeltaReason.DIFFERENT_COUNTER_GENERATION, reason)
+        // The generations themselves are untouched and still equal.
+        assertEquals(state.baseline.counterGeneration, state.latest.counterGeneration)
+    }
+
+    /**
+     * A merely *unmatched* counter still leaves the others usable.
+     *
+     * The stricter pair-level rule is specifically about a matched counter going backwards.
+     * Over-applying it would refuse every capture in which a device started or stopped
+     * reporting a wakelock, which is ordinary.
+     */
+    @Test
+    fun `an unmatched counter does not trigger the pair-level refusal`() {
+        val state = state(
+            baselineKwl = listOf(kwl("stable", 100L, 1L), kwl("vanished", 50L, 1L)),
+            latestKwl = listOf(kwl("stable", 400L, 4L), kwl("newcomer", 900L, 9L)),
         )
 
         val all = (CounterDeltaEngine.kernelWakelockDeltas(state) as CounterDeltaResult.Success).value
-
         assertEquals(1, all.size)
-        assertEquals("good", all.single().name)
+        assertEquals("stable", all.single().name)
+        assertNull(CounterDeltaEngine.continuityBreak(state.baseline, state.latest))
     }
 
     // ------------------------------------------------------------------- invariants
@@ -331,7 +471,9 @@ class CounterDeltaEngineTest {
      * reset detector chasing a bug in this file.
      */
     @Test
-    fun `no produced delta is ever negative`() {
+    fun `no produced delta is ever negative, and decreases refuse instead`() {
+        var successes = 0
+        var refusals = 0
         for (b in longArrayOf(0, 1, 500, 10_000, Long.MAX_VALUE / 4)) {
             for (l in longArrayOf(0, 1, 500, 10_000, Long.MAX_VALUE / 4)) {
                 val state = state(
@@ -339,18 +481,33 @@ class CounterDeltaEngineTest {
                     latestKwl = listOf(kwl("k", l, l)),
                 )
                 val single = CounterDeltaEngine.kernelWakelockDelta(state, WINDOW, "k")
-                if (single is CounterDeltaResult.Success) {
-                    assertTrue(
-                        "delta $b -> $l produced ${single.value.durationDeltaMillis}",
-                        single.value.durationDeltaMillis >= 0L && single.value.countDelta >= 0L,
+                val list = CounterDeltaEngine.kernelWakelockDeltas(state)
+
+                if (l < b) {
+                    // A decrease refuses, and refuses both entry points identically.
+                    refusals++
+                    assertEquals(
+                        "$b -> $l must refuse",
+                        CounterDeltaReason.COUNTER_DECREASED,
+                        (single as CounterDeltaResult.NotComparable).reason,
                     )
-                }
-                (CounterDeltaEngine.kernelWakelockDeltas(state) as CounterDeltaResult.Success)
-                    .value.forEach {
+                    assertTrue("$b -> $l must not produce a list", !list.succeeded)
+                } else {
+                    successes++
+                    val value = (single as CounterDeltaResult.Success).value
+                    assertTrue(
+                        "$b -> $l produced ${value.durationDeltaMillis}",
+                        value.durationDeltaMillis >= 0L && value.countDelta >= 0L,
+                    )
+                    (list as CounterDeltaResult.Success).value.forEach {
                         assertTrue(it.durationDeltaMillis >= 0L && it.countDelta >= 0L)
                     }
+                }
             }
         }
+        // The sweep must actually exercise both sides, or it proves only one of them.
+        assertTrue("the sweep covered $successes increases", successes > 0)
+        assertTrue("and $refusals decreases", refusals > 0)
     }
 
     /** An incomparable pair never yields a success, whichever entry point is used. */

@@ -187,8 +187,13 @@ data class SessionCounterState(
  * time to this session, which may be entirely wrong. If it disappears from the later capture,
  * assuming zero would manufacture a large negative that looks exactly like a counter reset.
  *
- * One unmatched counter never invalidates the others. The session can still report deltas for
+ * One *unmatched* counter never invalidates the others. The session still reports deltas for
  * everything that did match.
+ *
+ * A *decreased* counter is different, and the difference is the whole of Phase 7B.1. An
+ * unmatched counter says something about that counter; a decreased one says the accounting
+ * itself restarted, which makes every other counter in the same capture untrustworthy even
+ * where it still looks positive. See [continuityBreak].
  */
 object CounterDeltaEngine {
 
@@ -256,8 +261,71 @@ object CounterDeltaEngine {
             )
         }
 
+        // Checked last because it is the only test that reads the counters themselves rather
+        // than the capture's metadata.
+        return continuityBreak(baseline, latest)
+    }
+
+    /**
+     * Whether any matched cumulative counter went down between the two captures.
+     *
+     * One decrease condemns the whole pair, and that is stricter than it first looks. The
+     * obvious reading -- drop the counter that went backwards, keep the ones that still look
+     * positive -- is wrong, because a decrease is evidence that the *accounting* restarted,
+     * and a restart does not politely leave every other counter comparable:
+     *
+     * ```
+     * baseline   A = 100   B = 5
+     *   ...accounting restarts...
+     * latest     A =  50   B = 10
+     * ```
+     *
+     * A is visibly broken. B looks like a clean +5 and is not: it is 10 accumulated since the
+     * restart, measured against a baseline of 5 from before it. Reporting +5 would be a
+     * confident wrong number, which is worse than reporting nothing and is exactly the kind of
+     * number a user has no way to challenge.
+     *
+     * Both families are checked together because they come from one accounting capture. A
+     * kernel wakelock going backwards says that capture's accounting restarted; it says
+     * nothing reassuring about the application wakelocks beside it.
+     *
+     * This does **not** advance the counter generation, replace the baseline, or claim a
+     * platform reset. The evidence proves discontinuity, not its cause -- a reset, a new
+     * accounting window, an OS update and a source change all produce it, and there is not yet
+     * a way to tell them apart.
+     */
+    fun continuityBreak(
+        baseline: StoredCounterCapture,
+        latest: StoredCounterCapture,
+    ): CounterDeltaResult.NotComparable? {
+        val kernelBaseline = baseline.kernelWakelocks.associateBy { it.window to it.name }
+        latest.kernelWakelocks.forEach { later ->
+            val earlier = kernelBaseline[later.window to later.name] ?: return@forEach
+            if (later.totalTimeMillis < earlier.totalTimeMillis || later.count < earlier.count) {
+                return decreased("kernel wakelock", later.name)
+            }
+        }
+
+        val partialBaseline = baseline.partialWakelocks
+            .associateBy { Triple(it.window, it.uid, it.name) }
+        latest.partialWakelocks.forEach { later ->
+            val earlier = partialBaseline[Triple(later.window, later.uid, later.name)]
+                ?: return@forEach
+            if (later.totalTimeMillis < earlier.totalTimeMillis || later.count < earlier.count) {
+                return decreased("app wakelock", "uid " + later.uid + " " + later.name)
+            }
+        }
+
         return null
     }
+
+    private fun decreased(family: String, identity: String) = CounterDeltaResult.NotComparable(
+        CounterDeltaReason.COUNTER_DECREASED,
+        "A cumulative counter went down (" + family + " " + identity + "), so Android's " +
+            "accounting restarted between these two readings. Every other counter in the same " +
+            "capture is measured against a baseline from before that, so none of them can be " +
+            "trusted either.",
+    )
 
     /** Every kernel wakelock that can be compared, plus a reason for each that cannot. */
     fun kernelWakelockDeltas(
@@ -273,8 +341,9 @@ object CounterDeltaEngine {
             val earlier = baselineByKey[later.window to later.name] ?: continue
             val duration = later.totalTimeMillis - earlier.totalTimeMillis
             val count = later.count - earlier.count
-            // A decrease is reported by omission from the comparable set; the individual
-            // reason is available through kernelWakelockDelta for a single counter.
+            // Unreachable: comparability refuses the whole pair when any matched counter
+            // decreased. Kept so a future edit that moves that check cannot quietly
+            // reintroduce a negative delta.
             if (duration < 0L || count < 0L) continue
             deltas.add(
                 KernelWakelockDelta(
@@ -358,13 +427,9 @@ object CounterDeltaEngine {
 
         val duration = later.totalTimeMillis - earlier.totalTimeMillis
         val count = later.count - earlier.count
-        if (duration < 0L || count < 0L) {
-            return CounterDeltaResult.NotComparable(
-                CounterDeltaReason.COUNTER_DECREASED,
-                "A cumulative counter went down, so something restarted it. The difference " +
-                    "would not mean anything.",
-            )
-        }
+        // Names the counter that broke. Reaching here at all is unusual, because
+        // comparability already refuses a pair containing any decrease.
+        if (duration < 0L || count < 0L) return decreased("kernel wakelock", name)
 
         return CounterDeltaResult.Success(
             baselineCaptureId = state.baseline.captureId,
@@ -398,12 +463,7 @@ object CounterDeltaEngine {
 
         val duration = later.totalTimeMillis - earlier.totalTimeMillis
         val count = later.count - earlier.count
-        if (duration < 0L || count < 0L) {
-            return CounterDeltaResult.NotComparable(
-                CounterDeltaReason.COUNTER_DECREASED,
-                "A cumulative counter went down, so something restarted it.",
-            )
-        }
+        if (duration < 0L || count < 0L) return decreased("app wakelock", "uid " + uid + " " + name)
 
         return CounterDeltaResult.Success(
             baselineCaptureId = state.baseline.captureId,
