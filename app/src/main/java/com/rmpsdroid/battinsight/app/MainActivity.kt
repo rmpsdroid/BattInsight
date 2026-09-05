@@ -457,6 +457,15 @@ class BattInsightViewModel(context: Context) : ViewModel() {
     private fun generation(): CounterGeneration =
         sessions.status.value.session?.counterGeneration ?: CounterGeneration.INITIAL
 
+    /**
+     * Takes a sample and republishes the retained count.
+     *
+     * The count is re-read from the store rather than incremented from the result, so a
+     * refused or failed write cannot be published as a successful sample -- the number simply
+     * does not move. `SampleResult` is deliberately not surfaced to the UI yet; that is a
+     * Phase 9C follow-up, and until then this is what keeps a failure from looking like a
+     * success.
+     */
     private suspend fun recordSample(block: suspend () -> Unit) {
         block()
         activeSessionId()?.let { _retainedSamples.value = sampleStore.countFor(it) }
