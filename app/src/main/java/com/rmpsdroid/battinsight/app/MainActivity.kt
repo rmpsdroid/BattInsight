@@ -14,6 +14,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.core.net.toUri
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
@@ -41,18 +44,24 @@ import com.rmpsdroid.battinsight.history.SessionHistoryRepository
 import com.rmpsdroid.battinsight.persistence.BattInsightDatabase
 import com.rmpsdroid.battinsight.persistence.RoomSessionHistoryRepository
 import com.rmpsdroid.battinsight.persistence.CounterPersistResult
+import com.rmpsdroid.battinsight.persistence.RoomBatterySampleStore
 import com.rmpsdroid.battinsight.persistence.RoomCounterStore
 import com.rmpsdroid.battinsight.persistence.RoomSessionStateStore
+import com.rmpsdroid.battinsight.series.BatterySampleStore
+import com.rmpsdroid.battinsight.series.BatterySampler
+import com.rmpsdroid.battinsight.series.BatterySeries
 import com.rmpsdroid.battinsight.persistence.StorageCounts
 import com.rmpsdroid.battinsight.platform.GrantedAppProcessRunner
 import com.rmpsdroid.battinsight.setup.AccessSetupCoordinator
 import com.rmpsdroid.battinsight.setup.GrantStep
 import com.rmpsdroid.battinsight.session.SessionCoordinator
 import com.rmpsdroid.battinsight.session.SessionStatus
+import com.rmpsdroid.battinsight.session.CounterGeneration
 import com.rmpsdroid.battinsight.session.SessionTrigger
 import com.rmpsdroid.battinsight.setup.SetupState
 import com.rmpsdroid.battinsight.shizuku.ShizukuGateway
 import com.rmpsdroid.battinsight.shizuku.ShizukuUserServiceRunner
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -132,6 +141,22 @@ class BattInsightViewModel(context: Context) : ViewModel() {
      * a second would be a second answer to "what does this device believe".
      */
     private val counterStore = RoomCounterStore(BattInsightDatabase.get(appContext).counterDao())
+
+    /**
+     * The sampled battery series.
+     *
+     * Cheap enough to sample often: a reading costs ~343 bytes against ~25 KB for a
+     * privileged counter capture, which is why the two have different cadences and different
+     * retention rules rather than sharing either.
+     */
+    private val sampleStore: BatterySampleStore =
+        RoomBatterySampleStore(BattInsightDatabase.get(appContext).batterySampleDao())
+
+    private val sampler = BatterySampler(sampleStore)
+
+    /** Diagnostic only: how many samples the active session currently retains. */
+    private val _retainedSamples = MutableStateFlow(0)
+    val retainedSamples: StateFlow<Int> = _retainedSamples.asStateFlow()
 
     private val _counterState = MutableStateFlow<CounterUiState>(CounterUiState.None)
     val counterState: StateFlow<CounterUiState> = _counterState.asStateFlow()
@@ -389,12 +414,56 @@ class BattInsightViewModel(context: Context) : ViewModel() {
         viewModelScope.launch {
             batterySource.readCurrent(SessionTrigger.APP_START)?.let { sessions.begin(it) }
             _storageCounts.value = sessionStore.counts()
-            batterySource.observations().collect {
-                sessions.observe(it)
+            batterySource.observations().collect { observation ->
+                sessions.observe(observation)
+                // After the engine, never before: an observation that crossed a power
+                // transition belongs to the session it opened, not the one it closed.
+                recordSample { sampler.onObservation(activeSessionId(), observation, generation()) }
                 _storageCounts.value = sessionStore.counts()
             }
         }
     }
+
+    // ------------------------------------------------------------- lifecycle-visible series
+
+    /**
+     * Takes one reading now and records it, if a session owns it.
+     *
+     * Called when the UI becomes visible again. The reading is reconciled through the session
+     * engine first, so a boundary that happened while nothing was watching is accounted for
+     * before the sample is attributed.
+     */
+    suspend fun sampleOnBecomingVisible() {
+        val observation = batterySource.readCurrent(SessionTrigger.APP_START) ?: return
+        sessions.observe(observation)
+        recordSample { sampler.onObservation(activeSessionId(), observation, generation()) }
+    }
+
+    /** One cadence tick. Coalesced away if a sample already covers this window. */
+    suspend fun sampleOnCadence() {
+        val observation = batterySource.readCurrent(SessionTrigger.PERIODIC) ?: return
+        recordSample { sampler.onCadenceTick(activeSessionId(), observation, generation()) }
+    }
+
+    /**
+     * The session a sample would belong to, or null when the engine has none yet.
+     *
+     * Null is a real answer, not a failure: before the first observation is reconciled there
+     * is no interval for a sample to be part of, and inventing an id would create exactly the
+     * orphan row the foreign key exists to refuse.
+     */
+    private fun activeSessionId(): String? = sessions.status.value.session?.id?.toString()
+
+    private fun generation(): CounterGeneration =
+        sessions.status.value.session?.counterGeneration ?: CounterGeneration.INITIAL
+
+    private suspend fun recordSample(block: suspend () -> Unit) {
+        block()
+        activeSessionId()?.let { _retainedSamples.value = sampleStore.countFor(it) }
+    }
+
+    /** The session's series, already divided into segments and gaps. */
+    suspend fun seriesFor(sessionId: String): BatterySeries = sampleStore.seriesFor(sessionId)
 
     // ------------------------------------------------------------------------ navigation
 
@@ -469,6 +538,35 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent { BattInsightTheme { BattInsightApp() } }
+
+        // The sampled battery series, and the only timer in this application.
+        //
+        // `repeatOnLifecycle(STARTED)` rather than a coroutine this class remembers to cancel:
+        // it cancels the block on STOPPED and runs it afresh on STARTED, so "the cadence
+        // cannot outlive a visible UI" is a property of the primitive instead of a rule
+        // someone has to keep obeying. `lifecycle-runtime-ktx` is already a dependency; no new
+        // artifact was added for this.
+        //
+        // Deliberately not ProcessLifecycleOwner, not a service, not WorkManager, not an
+        // alarm, and not a manifest receiver. Nothing here can wake a dead process, and the
+        // gaps that leaves are rendered as gaps rather than smoothed over.
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                val vm = ViewModelProvider(
+                    this@MainActivity,
+                    BattInsightViewModel.Factory(this@MainActivity),
+                )[BattInsightViewModel::class.java]
+
+                // Immediately on becoming visible, then on the cadence from that moment --
+                // not aligned to a grid, because a grid would imply a regularity that a
+                // cancelled-and-restarted timer does not have.
+                vm.sampleOnBecomingVisible()
+                while (true) {
+                    delay(BatterySampleStore.BATTERY_SAMPLE_CADENCE_MILLIS)
+                    vm.sampleOnCadence()
+                }
+            }
+        }
     }
 }
 
