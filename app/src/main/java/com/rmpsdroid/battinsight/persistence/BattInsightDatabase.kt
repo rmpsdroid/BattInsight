@@ -39,7 +39,11 @@ import androidx.room3.RoomDatabase
  * by test.
  */
 @Database(
-    entities = [SnapshotEntity::class, SessionEntity::class, EngineStateEntity::class],
+    entities = [
+        SnapshotEntity::class, SessionEntity::class, EngineStateEntity::class,
+        CounterCaptureEntity::class, KernelWakelockCounterEntity::class,
+        PartialWakelockCounterEntity::class, SessionCounterStateEntity::class,
+    ],
     version = BattInsightDatabase.DATABASE_VERSION,
     exportSchema = true,
 )
@@ -47,14 +51,17 @@ abstract class BattInsightDatabase : RoomDatabase() {
 
     abstract fun sessionDao(): SessionDao
 
+    abstract fun counterDao(): CounterDao
+
     companion object {
         /**
          * The Room schema version.
          *
          * Distinct from `SnapshotSchemaVersion`, which versions the domain object rather
-         * than the tables. Both start at 1 and will not stay in step.
+         * than the tables. Both started at 1 and have already diverged: version 2 adds
+         * durable counter storage without changing the snapshot model at all.
          */
-        const val DATABASE_VERSION = 1
+        const val DATABASE_VERSION = 2
 
         const val DATABASE_NAME = "battinsight-sessions.db"
 
@@ -75,6 +82,9 @@ abstract class BattInsightDatabase : RoomDatabase() {
 
         private fun build(context: Context): BattInsightDatabase =
             Room.databaseBuilder(context, BattInsightDatabase::class.java, DATABASE_NAME)
+                // Real migrations, written by hand and tested from the committed schema of
+                // the version they start at.
+                .addMigrations(*ALL_MIGRATIONS)
                 // Deliberately absent: fallbackToDestructiveMigration(). See the class note.
                 .build()
 
