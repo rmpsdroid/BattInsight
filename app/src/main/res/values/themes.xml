@@ -1,4 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.BattInsight" parent="android:Theme.Material.Light.NoActionBar" />
+    <!--
+      DayNight, so the window background follows the system setting.
+
+      This was Material.Light, which meant the window stayed light behind a Compose tree that
+      was trying to render dark. Compose supplies the content colours; this supplies the
+      background the content sits on, and the two have to agree.
+    -->
+    <style name="Theme.BattInsight" parent="android:Theme.DeviceDefault.DayNight" >
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowNoTitle">true</item>
+    </style>
 </resources>
