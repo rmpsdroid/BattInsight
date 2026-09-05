@@ -34,7 +34,12 @@ import com.rmpsdroid.battinsight.batterystats.BatteryStatsCollector
 import com.rmpsdroid.battinsight.batterystats.CaptureClock
 import com.rmpsdroid.battinsight.collection.BackendIdentity
 import com.rmpsdroid.battinsight.collection.BackendKind
+import com.rmpsdroid.battinsight.batterystats.CounterDeltaEngine
+import com.rmpsdroid.battinsight.batterystats.CounterDeltaResult
+import com.rmpsdroid.battinsight.batterystats.DecodeResult
 import com.rmpsdroid.battinsight.persistence.BattInsightDatabase
+import com.rmpsdroid.battinsight.persistence.CounterPersistResult
+import com.rmpsdroid.battinsight.persistence.RoomCounterStore
 import com.rmpsdroid.battinsight.persistence.RoomSessionStateStore
 import com.rmpsdroid.battinsight.persistence.StorageCounts
 import com.rmpsdroid.battinsight.platform.GrantedAppProcessRunner
@@ -115,11 +120,25 @@ class BattInsightViewModel(context: Context) : ViewModel() {
     val collectorState: StateFlow<CollectorUiState> = _collectorState.asStateFlow()
 
     /**
+     * Durable counters for the current session.
+     *
+     * Shares the one database rather than opening a second: there is a single Room owner, and
+     * a second would be a second answer to "what does this device believe".
+     */
+    private val counterStore = RoomCounterStore(BattInsightDatabase.get(appContext).counterDao())
+
+    private val _counterState = MutableStateFlow<CounterUiState>(CounterUiState.None)
+    val counterState: StateFlow<CounterUiState> = _counterState.asStateFlow()
+
+    /**
      * Captures batterystats once, through whichever backend access setup selected.
      *
-     * Nothing is persisted. The payload is decoded, the counts are published, and the bytes
-     * are released with the local -- Phase 7A keeps privileged data in memory only, and the
-     * Room schema stays at version 1.
+     * The raw payload is still never persisted. What is stored is the decoded, verified
+     * subset -- kernel and partial wakelock totals plus the metadata needed to refuse an
+     * unsafe comparison -- and the bytes are released with the local.
+     *
+     * Capture happens only here, on an explicit press. There is no periodic job, no boot
+     * receiver and no background trigger; a privileged command runs when a person asks for it.
      */
     fun captureBatteryStats() {
         if (_collectorState.value is CollectorUiState.Capturing) return
@@ -143,10 +162,59 @@ class BattInsightViewModel(context: Context) : ViewModel() {
             } else {
                 BackendIdentity.Kind.APP_UID
             }
-            _collectorState.value = CollectorUiState.from(
-                collector.collect(runner, kind, android.os.Build.VERSION.RELEASE),
-            )
+            val result = collector.collect(runner, kind, android.os.Build.VERSION.RELEASE)
+            _collectorState.value = CollectorUiState.from(result)
+            if (result is DecodeResult.Success) {
+                persist(result)
+            }
         }
+    }
+
+    /**
+     * Stores a decoded capture against the current battery session, then recomputes deltas.
+     *
+     * Silent when there is no session yet: counters belong to an interval, and one that has
+     * not started cannot own a baseline. The store decides baseline-or-latest; this only
+     * decides that the attempt is worth making.
+     */
+    private suspend fun persist(result: DecodeResult.Success) {
+        val status = sessions.status.value
+        val session = status.session ?: return
+        val stored = counterStore.store(
+            capture = result.capture,
+            batterySessionId = session.id.toString(),
+            batterySnapshotId = session.latest.id.toString(),
+            counterGeneration = status.counterGeneration,
+            bootIdentity = status.bootIdentity,
+        )
+        _counterState.value = when (stored) {
+            is CounterPersistResult.Stored -> deltasFor(session.id.toString(), stored)
+            is CounterPersistResult.Rejected ->
+                CounterUiState.NotStored(stored.reason.name, stored.detail)
+            is CounterPersistResult.Failed ->
+                CounterUiState.NotStored(stored.outcome.name, stored.detail)
+        }
+    }
+
+    private suspend fun deltasFor(
+        sessionId: String,
+        stored: CounterPersistResult.Stored,
+    ): CounterUiState {
+        val state = counterStore.state(sessionId)
+            ?: return CounterUiState.NotStored("NO_STATE", "nothing was read back")
+        val kernel = CounterDeltaEngine.kernelWakelockDeltas(state)
+        val partial = CounterDeltaEngine.partialWakelockDeltas(state)
+        return CounterUiState.Available(
+            role = stored.role.name,
+            baselineIsLatest = state.baselineIsLatest,
+            latestWallClockMillis = state.latest.captureWallClockMillis,
+            elapsedMillis = state.latest.captureElapsedRealtimeMillis -
+                state.baseline.captureElapsedRealtimeMillis,
+            notComparableReason = (kernel as? CounterDeltaResult.NotComparable)?.detail,
+            kernelDeltas = (kernel as? CounterDeltaResult.Success)?.value.orEmpty(),
+            partialDeltas = (partial as? CounterDeltaResult.Success)?.value.orEmpty(),
+            storedCaptures = counterStore.captureCountFor(sessionId),
+        )
     }
 
     private val setup = AccessSetupCoordinator(
@@ -317,6 +385,7 @@ private fun BattInsightApp() {
         val sessionStatus by vm.sessionStatus.collectAsStateWithLifecycle()
         val storageCounts by vm.storageCounts.collectAsStateWithLifecycle()
         val collectorState by vm.collectorState.collectAsStateWithLifecycle()
+        val counterState by vm.counterState.collectAsStateWithLifecycle()
 
         // Leaving a secondary screen goes back to the main one rather than out of the app.
         BackHandler(enabled = screen != Screen.CapabilityCentre && mode.isChosen) {
@@ -350,6 +419,7 @@ private fun BattInsightApp() {
                 sessionStatus = sessionStatus,
                 storageCounts = storageCounts,
                 collectorState = collectorState,
+                counterState = counterState,
                 onCapture = vm::captureBatteryStats,
                 onRefresh = vm::refreshCapabilities,
                 onManageAccess = vm::openManageAccess,

@@ -14,6 +14,7 @@ import com.rmpsdroid.battinsight.session.relationTo
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -173,9 +174,17 @@ class PersistenceRoundTripTest {
         )
 
         assertEquals(schema, out.lastAccepted!!.schemaVersion)
-        // They happen to both be 1 today and will not stay in step. Storing one and
-        // inferring the other would couple two independent version domains.
-        assertEquals(1, BattInsightDatabase.DATABASE_VERSION)
+        // They started in step and no longer are: Phase 7B took the Room schema to 2 by
+        // adding counter tables, while the snapshot model did not change at all. That
+        // divergence is the point of this test rather than a problem with it -- storing one
+        // and inferring the other would couple two independent version domains.
+        assertEquals(1, schema.value)
+        assertEquals(2, BattInsightDatabase.DATABASE_VERSION)
+        assertNotEquals(
+            "the two version domains have now demonstrably separated",
+            schema.value,
+            BattInsightDatabase.DATABASE_VERSION,
+        )
     }
 
     @Test

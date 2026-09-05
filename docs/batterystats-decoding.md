@@ -213,12 +213,17 @@ session boundary  ≠  counter generation  ≠  batterystats reset
                   ≠  process restart     ≠  reboot
 ```
 
-## Nothing decoded is stored
+## What is stored, from Phase 7B
 
-The Room schema stays at **version 1**, holding session and snapshot metadata exactly as
-Phase 6 left it. Decoded counters live in memory for the life of one capture and are released
-with it. Durable storage waits for Phase 7B, when the shape of the data has been proven rather
-than assumed.
+The raw payload is still never stored. Two decoded counter families are: kernel wakelocks and
+per-UID partial wakelocks, with the version and platform metadata needed to refuse an unsafe
+comparison. Package names are not persisted.
+
+Schema version 2, migrated additively from version 1 and bounded to one baseline and one
+latest capture per battery session. See [persistence.md](persistence.md).
+
+Nothing else survives a capture: not the 42 undecoded record types, not the 45,000 history
+lines, not the payload.
 
 ## Licensing, and why proto is deferred rather than rejected
 

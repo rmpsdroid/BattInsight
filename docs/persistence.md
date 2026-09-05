@@ -278,6 +278,48 @@ to act on visibly, and where the copy can say plainly that the interval in progr
 Until then nothing is stored that the user cannot remove by clearing the app's data or
 uninstalling, and neither is hidden from them.
 
+## Decoded counters, from Phase 7B
+
+Schema version 2 adds four tables: `counter_capture`, `kernel_wakelock_counter`,
+`partial_wakelock_counter` and `session_counter_state`. The migration is additive — it creates
+tables and touches no existing row — and is tested from the committed v1 schema, with each v1
+table asserted to survive individually.
+
+**Two captures per session, not one per refresh.** `session_counter_state` has the session id
+as its primary key and names a baseline capture and a latest one, so "at most one baseline per
+session" is structural rather than a rule the application remembers. On the first capture both
+roles point at the same row, which is why a first capture costs one set of counters and not
+two identical ones.
+
+Measured: ~158 KB per session at realistic row counts (68 kernel and 315 application
+wakelocks), and a hundred refreshes in one session grew the database file from 272 KB to
+288 KB while the capture count stayed at two. The file does not shrink when a superseded
+capture is deleted, because SQLite keeps freed pages for reuse; nothing here runs `VACUUM`
+automatically, since rewriting a user's whole database in the background is not a decision to
+take on their behalf.
+
+The counter rows hang off `counter_capture` with `ON DELETE CASCADE` — the only cascade in
+this schema. Everywhere else a delete that would orphan data must fail; here the counters have
+no meaning without their capture, and a superseded latest is removed as one unit.
+
+That cascade is also why replacing the latest is written out rather than left to a conflict
+strategy: on a session's second capture the outgoing latest *is* the baseline, and deleting it
+would take the baseline's counters with it. The transaction repoints the state row first and
+deletes the superseded capture only when it is not the baseline.
+
+### The baseline does not move
+
+Once established it is immutable for the session. Every delta is measured from it, so a
+baseline that quietly advanced would make a session's accumulated totals shrink toward zero
+while looking entirely healthy. A test drives ten further captures and asserts the baseline
+after each one.
+
+A capture is refused as a baseline when it is truncated, when its accounting window spans an
+OS update, or when its checkin version has not been verified against a real capture. That last
+one is deliberately stricter than the decoder: the decoder warns and carries on so a future
+Android release does not simply fail, which is right for a transient display and wrong for a
+value that will be subtracted from for the rest of the session.
+
 ## Retention
 
 Session and snapshot history is **intentionally retained indefinitely for now**. Nothing

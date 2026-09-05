@@ -17,6 +17,8 @@ import androidx.compose.ui.unit.dp
 import com.rmpsdroid.battinsight.batterystats.BatteryStatsCapture
 import com.rmpsdroid.battinsight.batterystats.DecodeOutcome
 import com.rmpsdroid.battinsight.batterystats.DecodeResult
+import com.rmpsdroid.battinsight.batterystats.KernelWakelockDelta
+import com.rmpsdroid.battinsight.batterystats.PartialWakelockDelta
 
 /**
  * A diagnostic view of one decoded capture.
@@ -32,6 +34,7 @@ import com.rmpsdroid.battinsight.batterystats.DecodeResult
 @Composable
 fun CoreCollectorSection(
     state: CollectorUiState,
+    counters: CounterUiState,
     onCapture: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -50,7 +53,10 @@ fun CoreCollectorSection(
                     Text("Capturing…", style = MaterialTheme.typography.bodySmall)
                 }
 
-                is CollectorUiState.Decoded -> Decoded(state.capture)
+                is CollectorUiState.Decoded -> {
+                    Decoded(state.capture)
+                    Counters(counters)
+                }
                 is CollectorUiState.Failed -> Failed(state)
             }
 
@@ -180,4 +186,118 @@ sealed interface CollectorUiState {
             is DecodeResult.Failure -> Failed(result.outcome, result.detail)
         }
     }
+}
+
+/**
+ * What this session has accumulated, or why that cannot be said.
+ *
+ * The distinction the whole layout turns on: an unavailable delta is written as unavailable,
+ * never as zero. "Nothing accumulated" and "we cannot tell you what accumulated" look nothing
+ * alike here, because on a battery screen they would otherwise be indistinguishable and one
+ * of them would be a lie.
+ */
+@Composable
+private fun Counters(state: CounterUiState) {
+    when (state) {
+        CounterUiState.None -> Text(
+            "Not saved: this capture has no battery session to belong to yet.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        is CounterUiState.NotStored -> Text(
+            "Saved for display only. ${state.detail}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        is CounterUiState.Available -> {
+            Row("Session baseline", if (state.baselineIsLatest) "this capture" else "established earlier")
+            Row("Stored captures", "${state.storedCaptures} for this session")
+
+            when {
+                state.notComparableReason != null -> Text(
+                    "No comparison available. ${state.notComparableReason}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+
+                state.baselineIsLatest -> Text(
+                    "This is the session's first capture, so there is nothing to compare it " +
+                        "against yet. Capture again later to see what accumulated.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                else -> {
+                    Row("Measured over", "${state.elapsedMillis / 1000}s of this session")
+                    DeltaList(
+                        "Kernel wakelocks — change this session",
+                        state.kernelDeltas
+                            .filter { it.durationDeltaMillis > 0L }
+                            .sortedByDescending { it.durationDeltaMillis }
+                            .take(5)
+                            .map { it.name.ifEmpty { "(unnamed)" } to it.durationDeltaMillis to it.countDelta },
+                        emptyMessage = "No kernel wakelock accumulated time. On a device that " +
+                            "never fully suspends, such as an emulator, that is expected.",
+                    )
+                    DeltaList(
+                        "App wakelocks — change this session",
+                        state.partialDeltas
+                            .filter { it.durationDeltaMillis > 0L }
+                            .sortedByDescending { it.durationDeltaMillis }
+                            .take(5)
+                            .map { "uid ${it.uid} · ${it.name}" to it.durationDeltaMillis to it.countDelta },
+                        emptyMessage = "No app wakelock accumulated time between these captures.",
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DeltaList(
+    title: String,
+    rows: List<Pair<Pair<String, Long>, Long>>,
+    emptyMessage: String,
+) {
+    Text(title, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Medium)
+    if (rows.isEmpty()) {
+        Text(
+            emptyMessage,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        return
+    }
+    rows.forEach { (nameAndMillis, count) ->
+        val (name, millis) = nameAndMillis
+        Text(
+            "$name — +${millis / 1000}s over +$count",
+            style = MaterialTheme.typography.bodySmall,
+            fontFamily = FontFamily.Monospace,
+        )
+    }
+}
+
+/** What the session's durable counters currently support. */
+sealed interface CounterUiState {
+    /** No battery session yet, so nothing was stored. */
+    data object None : CounterUiState
+
+    /** The capture was shown but refused durable storage, with the reason. */
+    data class NotStored(val code: String, val detail: String) : CounterUiState
+
+    data class Available(
+        val role: String,
+        val baselineIsLatest: Boolean,
+        val latestWallClockMillis: Long,
+        val elapsedMillis: Long,
+        /** Non-null when the pair exists but may not be subtracted. */
+        val notComparableReason: String?,
+        val kernelDeltas: List<KernelWakelockDelta>,
+        val partialDeltas: List<PartialWakelockDelta>,
+        val storedCaptures: Int,
+    ) : CounterUiState
 }

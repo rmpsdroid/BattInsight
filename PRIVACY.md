@@ -40,14 +40,33 @@ BattInsight now handles two categories, and they are treated differently on purp
 | What it is | your charge/discharge intervals and the readings that bound them | the full `dumpsys batterystats` output |
 | Source | the public battery broadcast any app can see | a privileged command, via Shizuku or granted permissions |
 | Contains | levels, temperature, voltage, times | wakelocks, package names, per-app usage |
-| **Written to disk** | **yes** | **never** |
+| **Written to disk** | **yes** | **the raw payload never; a small decoded subset yes — see below** |
 | Lifetime | kept until you clear the app's data | decoded in memory, released immediately |
 | Logged | no | no |
 
 The privileged payload is the more sensitive of the two by a wide margin, and it is the one
-that is never persisted. It is decoded into counts and a short diagnostic summary, and the
-bytes are discarded with the capture. Nothing derived from it is written to the database:
-the stored schema holds session metadata only.
+that is never persisted **as a payload**. It is decoded, the bytes are discarded with the
+capture, and a small verified subset of the result is kept.
+
+### What is kept from a privileged capture
+
+Two counter families, and the metadata needed to know whether two captures may be compared:
+
+| Kept | Not kept |
+|---|---|
+| kernel wakelock name, total time, count | the raw ~900 KB payload |
+| app wakelock **numeric UID**, tag, total time, count | package names |
+| format and platform version, capture time, boot identity | battery history (45,000 lines per capture) |
+| a digest of the payload, and its size | the 42 record types BattInsight does not decode |
+
+**Package names are deliberately not stored.** A numeric UID is a far weaker statement about
+your device than a durable list of the applications on it, and the question this data answers
+— what accumulated during this battery session — does not need the names. They are resolved
+transiently for display and never written down.
+
+Storage is bounded per battery session, not per refresh: each session keeps a first capture
+and a most recent one. Refreshing a hundred times leaves two, measured at roughly 158 KB for
+a session on a device reporting 68 kernel and 315 application wakelocks.
 
 BattInsight stores two things in its own private storage, and nothing else:
 
@@ -64,10 +83,11 @@ What is stored is BattInsight's own reading of the *public* battery broadcast ev
 application on Android can see. It is not per-application usage, and it names no packages.
 
 The privileged batterystats payload **does** contain package names and per-application
-wakelock data. That is exactly why none of it is stored, none of it is logged, and the
-on-screen diagnostic shows counts plus at most five kernel wakelock names rather than the
-list. A full dump of every wakelock and package on your device rendered to the screen is one
-screenshot away from a bug report, so it is not rendered.
+wakelock data. None of the payload is logged, and the on-screen diagnostic shows counts plus
+at most five names rather than the list — a full dump of every wakelock and package on your
+device rendered to the screen is one screenshot away from a bug report, so it is not rendered.
+
+What is stored from it is listed above, and the package names are not in that list.
 
 **Capability and permission state is still never stored.** Those readings describe the device
 *at a moment* and go stale as soon as anything changes; keeping them would create a second,

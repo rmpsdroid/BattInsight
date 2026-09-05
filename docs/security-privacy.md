@@ -162,6 +162,30 @@ Shizuku configuration edited behind their back.
 
 ## Persisted state
 
+> **Changed in Phase 7B.** Phase 7A said no privileged data was persisted at all. That is now
+> too strong: the raw payload is still never stored, but a small verified subset decoded from
+> it is. The distinction is set out immediately below, and it is the difference between
+> storing a 900 KB dump of a device and storing two dozen numbers from it.
+
+### Privileged captures: what survives the capture
+
+| Stored | Not stored |
+|---|---|
+| kernel wakelock name, total ms, count | the raw payload, in any column or file |
+| app wakelock numeric UID, tag, total ms, count | package names |
+| checkin/record/parcel versions, platform fingerprints | battery history lines |
+| capture time, boot identity, counter generation | undecoded record types |
+| payload size and digest | decode warning text |
+
+Bounded per battery session: one baseline capture and one latest, whatever the refresh count.
+
+**No package attribution is persisted.** The `uid` records are decoded and used for live
+display, and are not written to the database. A UID is a number; a package list is an
+inventory of what a person runs.
+
+The database stays app-private, cloud backup remains disabled for every domain, and none of
+this is logged or leaves the device.
+
 Two things: the access mode the user chose, and the user's own battery sessions — the
 charge and discharge intervals BattInsight observed, plus the readings that bound them
 (level, temperature, voltage, charge counter, plug source, health) and the times they were
