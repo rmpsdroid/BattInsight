@@ -153,25 +153,39 @@ data class CounterCaptureEntity(
  */
 @Entity(
     tableName = "kernel_wakelock_counter",
-    primaryKeys = ["capture_id", "accounting_window", "name"],
+    primaryKeys = ["capture_id", "accounting_window", "identity_id"],
     foreignKeys = [
         ForeignKey(
             entity = CounterCaptureEntity::class,
             parentColumns = ["capture_id"],
             childColumns = ["capture_id"],
             // CASCADE here, unlike everywhere else, and the difference is deliberate: these
-            // rows have no meaning without their capture. A superseded LATEST is deleted as
+            // rows have no meaning without their capture. A superseded capture is deleted as
             // one unit, and leaving orphaned counters behind would be the leak this bounded
             // retention model exists to prevent.
             onDelete = ForeignKey.CASCADE,
         ),
+        ForeignKey(
+            entity = WakelockIdentityEntity::class,
+            parentColumns = ["identity_id"],
+            childColumns = ["identity_id"],
+            // NO_ACTION, not CASCADE: an identity must never be able to take counter rows
+            // with it. The orphan sweep runs the other way round -- identities are removed
+            // only once nothing references them.
+            onDelete = ForeignKey.NO_ACTION,
+        ),
     ],
-    indices = [Index("capture_id")],
+    indices = [
+        Index("capture_id"),
+        /** "this counter's series across a session" -- an integer lookup, not a name scan. */
+        Index("identity_id", "capture_id"),
+    ],
 )
 data class KernelWakelockCounterEntity(
     @ColumnInfo(name = "capture_id") val captureId: String,
     @ColumnInfo(name = "accounting_window") val accountingWindow: String,
-    @ColumnInfo(name = "name") val name: String,
+    /** Resolves to `(KERNEL, -1, name)` in [WakelockIdentityEntity]. */
+    @ColumnInfo(name = "identity_id") val identityId: Long,
     /** Cumulative held time in milliseconds within the window. */
     @ColumnInfo(name = "total_duration_millis") val totalDurationMillis: Long,
     /** Cumulative acquisition count within the window. */
@@ -191,7 +205,7 @@ data class KernelWakelockCounterEntity(
  */
 @Entity(
     tableName = "partial_wakelock_counter",
-    primaryKeys = ["capture_id", "accounting_window", "uid", "name"],
+    primaryKeys = ["capture_id", "accounting_window", "identity_id"],
     foreignKeys = [
         ForeignKey(
             entity = CounterCaptureEntity::class,
@@ -199,14 +213,23 @@ data class KernelWakelockCounterEntity(
             childColumns = ["capture_id"],
             onDelete = ForeignKey.CASCADE,
         ),
+        ForeignKey(
+            entity = WakelockIdentityEntity::class,
+            parentColumns = ["identity_id"],
+            childColumns = ["identity_id"],
+            onDelete = ForeignKey.NO_ACTION,
+        ),
     ],
-    indices = [Index("capture_id")],
+    indices = [
+        Index("capture_id"),
+        Index("identity_id", "capture_id"),
+    ],
 )
 data class PartialWakelockCounterEntity(
     @ColumnInfo(name = "capture_id") val captureId: String,
     @ColumnInfo(name = "accounting_window") val accountingWindow: String,
-    @ColumnInfo(name = "uid") val uid: Int,
-    @ColumnInfo(name = "name") val name: String,
+    /** Resolves to `(PARTIAL, uid, name)` in [WakelockIdentityEntity]. */
+    @ColumnInfo(name = "identity_id") val identityId: Long,
     @ColumnInfo(name = "total_duration_millis") val totalDurationMillis: Long,
     @ColumnInfo(name = "count") val count: Long,
 )

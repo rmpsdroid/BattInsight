@@ -43,6 +43,7 @@ import androidx.room3.RoomDatabase
         SnapshotEntity::class, SessionEntity::class, EngineStateEntity::class,
         CounterCaptureEntity::class, KernelWakelockCounterEntity::class,
         PartialWakelockCounterEntity::class, SessionCounterStateEntity::class,
+        WakelockIdentityEntity::class, BatterySampleEntity::class,
     ],
     version = BattInsightDatabase.DATABASE_VERSION,
     exportSchema = true,
@@ -53,15 +54,18 @@ abstract class BattInsightDatabase : RoomDatabase() {
 
     abstract fun counterDao(): CounterDao
 
+    abstract fun batterySampleDao(): BatterySampleDao
+
     companion object {
         /**
          * The Room schema version.
          *
          * Distinct from `SnapshotSchemaVersion`, which versions the domain object rather
-         * than the tables. Both started at 1 and have already diverged: version 2 adds
-         * durable counter storage without changing the snapshot model at all.
+         * than the tables. Both started at 1 and have already diverged: version 2 added
+         * durable counter storage, and version 3 adds the sampled series -- neither changed
+         * the snapshot model at all.
          */
-        const val DATABASE_VERSION = 2
+        const val DATABASE_VERSION = 3
 
         const val DATABASE_NAME = "battinsight-sessions.db"
 
