@@ -289,11 +289,16 @@ Schema version 2 adds four tables: `counter_capture`, `kernel_wakelock_counter`,
 tables and touches no existing row — and is tested from the committed v1 schema, with each v1
 table asserted to survive individually.
 
-**Two captures per session, not one per refresh.** `session_counter_state` has the session id
-as its primary key and names a baseline capture and a latest one, so "at most one baseline per
+**A baseline and a latest per session.** `session_counter_state` has the session id as its
+primary key and names a baseline capture and a latest one, so "at most one baseline per
 session" is structural rather than a rule the application remembers. On the first capture both
 roles point at the same row, which is why a first capture costs one set of counters and not
 two identical ones.
+
+> Phase 7B kept **exactly** those two and discarded everything between them, which is why there
+> was no series to chart. Phase 9B retains the middle — see *Sampled series, from Phase 9B*
+> below and `time-series.md`. `session_counter_state` is unchanged: the ordered series is
+> derived from `counter_capture` rows, which already carry their session and a timestamp.
 
 Measured: ~158 KB per session at realistic row counts (68 kernel and 315 application
 wakelocks), and a hundred refreshes in one session grew the database file from 272 KB to
@@ -342,3 +347,45 @@ The user can still remove everything by clearing the application's data or unins
 No package names, no per-application usage, no identifiers beyond BattInsight's own UUIDs and
 the kernel boot id, and no network anything. `storageCounts` reports *how many* rows exist and
 never their contents. See [security-privacy.md](security-privacy.md).
+
+
+## Sampled series, from Phase 9B
+
+Schema version 3 adds `wakelock_identity` and `battery_sample`, rebuilds the two counter child
+tables to reference interned identities, and adds one nullable column to `battery_sessions`.
+`session_counter_state` and `counter_capture` are unchanged.
+
+Full detail is in [`time-series.md`](time-series.md). The persistence-shaped parts:
+
+**The migration is the first that is not purely additive.** SQLite cannot retype a column in
+place, so the counter child tables are rebuilt with the standard create-copy-drop-rename
+recipe. The copy joins on exactly the columns that formed the old primary key, so each row
+matches once — no loss, no invention, no merge. The tables keep their **names**: renaming them
+would have forced another edit to `SessionDao.clearAll`, which is the method that silently
+broke in Phase 7B and had to be repaired in 7B.2.
+
+**Interning is a 4× saving with no semantic cost.** Measured on a real Android 16 capture:
+103.8 KB per capture with names repeated on every row, 25.0 KB with them interned. Partial
+wakelock names average 79 characters and reach 423.
+
+**`AUTOINCREMENT` on `wakelock_identity` is load-bearing.** Identities are swept when nothing
+references them, and without it SQLite would reuse a deleted rowid and hand it to a different
+wakelock, silently relabelling retained history.
+
+**The clear order grew by two steps.** Identities can only be removed once the counter rows
+referencing them have gone, which happens via the cascade from `counter_capture`:
+
+```
+engine_state → session_counter_state → counter_capture (cascades its counter rows)
+→ battery_sample → battery_sessions → battery_snapshots → wakelock_identity
+```
+
+**Retention is asymmetric on purpose.** Battery samples have a hard cap of 300 per session;
+counter captures have a soft target of 8 that is exceeded rather than enforced when removing a
+capture would destroy evidence of a discontinuity. Samples come from a timer and are
+individually disposable; a capture may be the only record that Android's counters restarted.
+
+**The eviction watermark records what was deleted, not what survived.** Eviction removes
+oldest-first, so the greatest deleted elapsed time sits strictly below the oldest retained
+sample, and the read model can tell that the space before the series once held data. An earlier
+draft recorded the oldest *retained* value and the gap test could never fire.
