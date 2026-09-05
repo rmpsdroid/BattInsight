@@ -279,23 +279,17 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
         connection.execSQL(
             "ALTER TABLE `partial_wakelock_counter_new` RENAME TO `partial_wakelock_counter`",
         )
+        // Only the identity index. The v2 capture_id index is deliberately not recreated:
+        // the v3 primary key already begins with capture_id, so SQLite serves the by-capture
+        // query from the primary-key index with the same plan and the same measured time,
+        // and the separate index cost 17-20% of these tables for nothing.
         connection.execSQL(
-            "CREATE INDEX IF NOT EXISTS `index_kernel_wakelock_counter_capture_id` " +
-                "ON `kernel_wakelock_counter` (`capture_id`)",
+            "CREATE INDEX IF NOT EXISTS `index_kernel_wakelock_counter_identity_id` " +
+                "ON `kernel_wakelock_counter` (`identity_id`)",
         )
         connection.execSQL(
-            "CREATE INDEX IF NOT EXISTS " +
-                "`index_kernel_wakelock_counter_identity_id_capture_id` " +
-                "ON `kernel_wakelock_counter` (`identity_id`, `capture_id`)",
-        )
-        connection.execSQL(
-            "CREATE INDEX IF NOT EXISTS `index_partial_wakelock_counter_capture_id` " +
-                "ON `partial_wakelock_counter` (`capture_id`)",
-        )
-        connection.execSQL(
-            "CREATE INDEX IF NOT EXISTS " +
-                "`index_partial_wakelock_counter_identity_id_capture_id` " +
-                "ON `partial_wakelock_counter` (`identity_id`, `capture_id`)",
+            "CREATE INDEX IF NOT EXISTS `index_partial_wakelock_counter_identity_id` " +
+                "ON `partial_wakelock_counter` (`identity_id`)",
         )
 
         // 7. The retention watermark. Null for every existing session, which is true: nothing

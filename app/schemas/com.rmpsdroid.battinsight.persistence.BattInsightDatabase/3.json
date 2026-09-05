@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 3,
-    "identityHash": "343da96ca95eb9772030461e49e04c3d",
+    "identityHash": "5ac6d83f0a889e2f11b934421191b206",
     "entities": [
       {
         "tableName": "battery_snapshots",
@@ -588,23 +588,13 @@
         },
         "indices": [
           {
-            "name": "index_kernel_wakelock_counter_capture_id",
+            "name": "index_kernel_wakelock_counter_identity_id",
             "unique": false,
             "columnNames": [
-              "capture_id"
+              "identity_id"
             ],
             "orders": [],
-            "createSql": "CREATE INDEX IF NOT EXISTS `index_kernel_wakelock_counter_capture_id` ON `${TABLE_NAME}` (`capture_id`)"
-          },
-          {
-            "name": "index_kernel_wakelock_counter_identity_id_capture_id",
-            "unique": false,
-            "columnNames": [
-              "identity_id",
-              "capture_id"
-            ],
-            "orders": [],
-            "createSql": "CREATE INDEX IF NOT EXISTS `index_kernel_wakelock_counter_identity_id_capture_id` ON `${TABLE_NAME}` (`identity_id`, `capture_id`)"
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_kernel_wakelock_counter_identity_id` ON `${TABLE_NAME}` (`identity_id`)"
           }
         ],
         "foreignKeys": [
@@ -677,23 +667,13 @@
         },
         "indices": [
           {
-            "name": "index_partial_wakelock_counter_capture_id",
+            "name": "index_partial_wakelock_counter_identity_id",
             "unique": false,
             "columnNames": [
-              "capture_id"
+              "identity_id"
             ],
             "orders": [],
-            "createSql": "CREATE INDEX IF NOT EXISTS `index_partial_wakelock_counter_capture_id` ON `${TABLE_NAME}` (`capture_id`)"
-          },
-          {
-            "name": "index_partial_wakelock_counter_identity_id_capture_id",
-            "unique": false,
-            "columnNames": [
-              "identity_id",
-              "capture_id"
-            ],
-            "orders": [],
-            "createSql": "CREATE INDEX IF NOT EXISTS `index_partial_wakelock_counter_identity_id_capture_id` ON `${TABLE_NAME}` (`identity_id`, `capture_id`)"
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_partial_wakelock_counter_identity_id` ON `${TABLE_NAME}` (`identity_id`)"
           }
         ],
         "foreignKeys": [
@@ -994,7 +974,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '343da96ca95eb9772030461e49e04c3d')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '5ac6d83f0a889e2f11b934421191b206')"
     ]
   }
 }

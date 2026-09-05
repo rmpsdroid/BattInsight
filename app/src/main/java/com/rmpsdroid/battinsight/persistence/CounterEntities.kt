@@ -176,9 +176,22 @@ data class CounterCaptureEntity(
         ),
     ],
     indices = [
-        Index("capture_id"),
-        /** "this counter's series across a session" -- an integer lookup, not a name scan. */
-        Index("identity_id", "capture_id"),
+        /**
+         * "this counter's series across a session" -- an integer lookup, not a name scan.
+         *
+         * Narrowed from `(identity_id, capture_id)` in Phase 9B.1 after measurement: the
+         * composite was no faster at any retained size (55.0 vs 50.2 us at 8 captures, equal
+         * at 24, 198.6 vs 185.7 at 96) and cost 8-14% more file. Without *any* identity index
+         * the planner falls back to a skip-scan over the primary key and the query is 1.2-1.7x
+         * slower, so this one is earning its place.
+         *
+         * There is deliberately no separate `Index("capture_id")`. The primary key is
+         * `(capture_id, accounting_window, identity_id)`, which SQLite implements as an index
+         * whose leftmost column is already `capture_id` -- measured: the by-capture query
+         * produces the same plan shape and the same time either way, while the extra index
+         * cost 17-20% of these tables.
+         */
+        Index("identity_id"),
     ],
 )
 data class KernelWakelockCounterEntity(
@@ -220,10 +233,8 @@ data class KernelWakelockCounterEntity(
             onDelete = ForeignKey.NO_ACTION,
         ),
     ],
-    indices = [
-        Index("capture_id"),
-        Index("identity_id", "capture_id"),
-    ],
+    // Same index reasoning as the kernel table above.
+    indices = [Index("identity_id")],
 )
 data class PartialWakelockCounterEntity(
     @ColumnInfo(name = "capture_id") val captureId: String,
