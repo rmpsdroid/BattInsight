@@ -62,6 +62,7 @@ fun CapabilityCentreScreen(
     onCapture: () -> Unit,
     onRefresh: () -> Unit,
     onManageAccess: () -> Unit,
+    onOpenHistory: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Scaffold(
@@ -130,6 +131,13 @@ fun CapabilityCentreScreen(
                         detail = "${offer.displayName} would work, but is not being used " +
                             "because you chose otherwise. Change it under Manage access.",
                     )
+                }
+            }
+            item {
+                // History first: it is the thing a person opens the app to look at, whereas
+                // access management is something they do once.
+                Button(onClick = onOpenHistory, modifier = Modifier.fillMaxWidth()) {
+                    Text("Battery history")
                 }
             }
             item {

@@ -37,7 +37,9 @@ import com.rmpsdroid.battinsight.collection.BackendKind
 import com.rmpsdroid.battinsight.batterystats.CounterDeltaEngine
 import com.rmpsdroid.battinsight.batterystats.CounterDeltaResult
 import com.rmpsdroid.battinsight.batterystats.DecodeResult
+import com.rmpsdroid.battinsight.history.SessionHistoryRepository
 import com.rmpsdroid.battinsight.persistence.BattInsightDatabase
+import com.rmpsdroid.battinsight.persistence.RoomSessionHistoryRepository
 import com.rmpsdroid.battinsight.persistence.CounterPersistResult
 import com.rmpsdroid.battinsight.persistence.RoomCounterStore
 import com.rmpsdroid.battinsight.persistence.RoomSessionStateStore
@@ -61,6 +63,10 @@ sealed interface Screen {
     data object Setup : Screen
     data object CapabilityCentre : Screen
     data object ManageAccess : Screen
+    data object History : Screen
+
+    /** One battery period, opened from history. */
+    data class SessionDetail(val sessionId: String) : Screen
 }
 
 /**
@@ -129,6 +135,103 @@ class BattInsightViewModel(context: Context) : ViewModel() {
 
     private val _counterState = MutableStateFlow<CounterUiState>(CounterUiState.None)
     val counterState: StateFlow<CounterUiState> = _counterState.asStateFlow()
+
+    /**
+     * Read-only history, over the same database.
+     *
+     * A repository rather than a DAO: nothing above this line can insert, update or delete,
+     * which is a stronger guarantee than remembering not to.
+     */
+    private val history: SessionHistoryRepository = RoomSessionHistoryRepository(
+        BattInsightDatabase.get(appContext).sessionDao(),
+        BattInsightDatabase.get(appContext).counterDao(),
+    )
+
+    private val _historyState = MutableStateFlow<HistoryUiState>(HistoryUiState.Loading)
+    val historyState: StateFlow<HistoryUiState> = _historyState.asStateFlow()
+
+    private val _detailState = MutableStateFlow<DetailUiState>(DetailUiState.Loading)
+    val detailState: StateFlow<DetailUiState> = _detailState.asStateFlow()
+
+    /**
+     * Opens history and loads the first page.
+     *
+     * Reading saved periods needs no privileged access at all -- it is BattInsight's own
+     * database. History therefore works when Shizuku is not running and when no permission has
+     * ever been granted; only a live capture needs a backend.
+     */
+    fun openHistory() {
+        _screen.value = Screen.History
+        _historyState.value = HistoryUiState.Loading
+        viewModelScope.launch { loadHistoryPage(before = null, append = false) }
+    }
+
+    fun loadMoreHistory() {
+        val current = _historyState.value as? HistoryUiState.Loaded ?: return
+        val oldest = current.rows.lastOrNull()?.startWallClockMillis ?: return
+        viewModelScope.launch { loadHistoryPage(before = oldest, append = true) }
+    }
+
+    private suspend fun loadHistoryPage(before: Long?, append: Boolean) {
+        val existing = (_historyState.value as? HistoryUiState.Loaded)?.rows.orEmpty()
+        val result = runCatching { history.recentSessions(before = before) }
+        val total = runCatching { history.sessionCount() }.getOrDefault(0)
+
+        result.onFailure { failure ->
+            if (failure is kotlinx.coroutines.CancellationException) throw failure
+            // An unreadable store is not an empty one, and the screen says which it is.
+            _historyState.value = HistoryUiState.Empty(failure.javaClass.simpleName)
+        }
+        val rows = result.getOrNull() ?: return
+
+        val combined = if (append) existing + rows else rows
+        _historyState.value = if (combined.isEmpty()) {
+            HistoryUiState.Empty(null)
+        } else {
+            HistoryUiState.Loaded(
+                rows = combined,
+                totalCount = total,
+                canLoadMore = combined.size < total,
+                formatWallClock = ::formatWallClock,
+            )
+        }
+    }
+
+    fun openSessionDetail(sessionId: String) {
+        _screen.value = Screen.SessionDetail(sessionId)
+        _detailState.value = DetailUiState.Loading
+        viewModelScope.launch {
+            val detail = runCatching { history.sessionDetail(sessionId) }.getOrNull()
+            _detailState.value = if (detail == null) {
+                DetailUiState.Missing
+            } else {
+                DetailUiState.Loaded(detail, ::formatWallClock, ::resolvePackage)
+            }
+        }
+    }
+
+    /**
+     * A wall clock rendered in the user's own locale and zone.
+     *
+     * Presentation only. No duration is ever computed from these values -- the monotonic clock
+     * does that -- so a time-zone change alters how a period is labelled and never how long it
+     * is recorded as lasting.
+     */
+    private fun formatWallClock(millis: Long): String =
+        java.text.DateFormat.getDateTimeInstance(
+            java.text.DateFormat.MEDIUM,
+            java.text.DateFormat.SHORT,
+        ).format(java.util.Date(millis))
+
+    /**
+     * What runs under a UID *now*.
+     *
+     * Enrichment, not historical attribution. Phase 7B deliberately does not persist package
+     * mappings, so this cannot claim the name applied when the reading was taken -- which is
+     * why the UI always shows the number alongside it.
+     */
+    private fun resolvePackage(uid: Int): String? =
+        runCatching { appContext.packageManager.getNameForUid(uid) }.getOrNull()
 
     /**
      * Captures batterystats once, through whichever backend access setup selected.
@@ -365,7 +468,7 @@ class BattInsightViewModel(context: Context) : ViewModel() {
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { BattInsightApp() }
+        setContent { BattInsightTheme { BattInsightApp() } }
     }
 }
 
@@ -386,10 +489,18 @@ private fun BattInsightApp() {
         val storageCounts by vm.storageCounts.collectAsStateWithLifecycle()
         val collectorState by vm.collectorState.collectAsStateWithLifecycle()
         val counterState by vm.counterState.collectAsStateWithLifecycle()
+        val historyState by vm.historyState.collectAsStateWithLifecycle()
+        val detailState by vm.detailState.collectAsStateWithLifecycle()
 
         // Leaving a secondary screen goes back to the main one rather than out of the app.
+        // Detail goes back to History rather than all the way out, so the stack reads the way
+        // a person navigated it. Nothing intercepts the gesture itself, so predictive back
+        // keeps working.
         BackHandler(enabled = screen != Screen.CapabilityCentre && mode.isChosen) {
-            vm.openCapabilityCentre()
+            when (screen) {
+                is Screen.SessionDetail -> vm.openHistory()
+                else -> vm.openCapabilityCentre()
+            }
         }
 
         when (screen) {
@@ -423,6 +534,19 @@ private fun BattInsightApp() {
                 onCapture = vm::captureBatteryStats,
                 onRefresh = vm::refreshCapabilities,
                 onManageAccess = vm::openManageAccess,
+                onOpenHistory = vm::openHistory,
+            )
+
+            Screen.History -> SessionHistoryScreen(
+                state = historyState,
+                onOpenSession = vm::openSessionDetail,
+                onLoadMore = vm::loadMoreHistory,
+                onBack = vm::openCapabilityCentre,
+            )
+
+            is Screen.SessionDetail -> SessionDetailScreen(
+                state = detailState,
+                onBack = vm::openHistory,
             )
 
             Screen.ManageAccess -> ManageAccessScreen(
