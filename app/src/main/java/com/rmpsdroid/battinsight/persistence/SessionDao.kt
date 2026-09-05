@@ -121,6 +121,19 @@ interface SessionDao {
     @Query("DELETE FROM counter_capture")
     suspend fun deleteCounterCaptures()
 
+    @Query("DELETE FROM battery_sample")
+    suspend fun deleteBatterySamples()
+
+    /**
+     * Removes every wakelock identity. Safe only once the counter rows have gone.
+     *
+     * Unconditional rather than orphan-scoped, because a full clear leaves nothing that could
+     * legitimately still reference one. The narrower counter-only clear uses
+     * `CounterDao.sweepOrphanIdentities` instead.
+     */
+    @Query("DELETE FROM wakelock_identity")
+    suspend fun deleteWakelockIdentities()
+
     @Query("DELETE FROM battery_sessions")
     suspend fun deleteSessions()
 
@@ -161,10 +174,12 @@ interface SessionDao {
      * engine_state             -> battery_sessions, battery_snapshots
      * session_counter_state    -> battery_sessions, counter_capture
      * counter_capture          -> battery_sessions
-     * kernel_wakelock_counter  -> counter_capture   (CASCADE)
-     * partial_wakelock_counter -> counter_capture   (CASCADE)
+     * kernel_wakelock_counter  -> counter_capture   (CASCADE), wakelock_identity
+     * partial_wakelock_counter -> counter_capture   (CASCADE), wakelock_identity
+     * battery_sample           -> battery_sessions
      * battery_sessions         -> battery_snapshots
      * battery_snapshots        -> (none)
+     * wakelock_identity        -> (none)
      * ```
      *
      * The two wakelock tables are not deleted explicitly. They are the only children in this
@@ -180,8 +195,14 @@ interface SessionDao {
     suspend fun clearAll() {
         deleteEngineState()
         deleteSessionCounterState()
+        // Cascades the two counter child tables away, which is also what releases every
+        // wakelock_identity reference -- so identities can only be removed after this.
         deleteCounterCaptures()
+        deleteBatterySamples()
         deleteSessions()
         deleteSnapshots()
+        // Last. Phase 9B added a NO ACTION key from the counter rows to this table, so
+        // deleting identities any earlier is the same class of failure 7B.2 fixed.
+        deleteWakelockIdentities()
     }
 }
