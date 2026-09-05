@@ -17,8 +17,11 @@ testable analysis of battery and power behaviour.
 > determine which access backends are usable, guide you through granting access by whichever
 > of three routes you prefer, verify that battery statistics can actually be acquired, and
 > track charge and discharge intervals correctly across reboots, process death and clock
-> changes, storing them so they survive the app closing. It does not yet decode or display
-> any battery statistics.
+> changes, storing them so they survive the app closing. It decodes kernel and app wakelock
+> counters from `dumpsys batterystats`, stores a verified subset of them, and shows what
+> changed during a battery period — refusing to show a difference when the readings cannot
+> honestly be compared. It does not chart anything yet, and it decodes four of the roughly
+> forty-six record types Android emits.
 >
 > **BattInsight is not currently a replacement for any existing battery statistics
 > application.**
@@ -72,9 +75,13 @@ that silently shows an empty screen when it lacks access is worse than one that 
 - 258 unit tests and 35 instrumented tests, written against platform output captured
   from real measurement and validated on an Android 16 emulator
 
-**No battery diagnostics are implemented.** The application can tell you whether it *could*
-collect data, and it tracks and stores which charge or discharge interval you are in; it does
-not yet decode or display any battery statistics.
+**Battery diagnostics are partially implemented.** The application tracks and stores charge
+and discharge periods, decodes kernel and app wakelock counters from `dumpsys batterystats`,
+and presents what accumulated during a period through history and detail screens.
+
+Two limits are worth stating plainly. It decodes **four** of the roughly forty-six aggregate
+record types Android emits — everything else is counted and reported as undecoded rather than
+guessed at. And it shows no charts: Phase 9 defines those once this presentation is stable.
 
 ### Planned
 
@@ -86,7 +93,7 @@ None of the following exists yet.
 | Wakelocks | Partial (per-application) wakelock attribution |
 | Kernel wakelocks | Kernel wakelock attribution |
 | Alarms | Alarm and scheduled-job attribution |
-| Sessions | A history screen over the stored sessions (the engine and its storage exist; nothing charts them) |
+| Charts | Trends over time (history and detail screens exist; nothing charts them yet) |
 | Diagnostics | A redacted diagnostic bundle for troubleshooting |
 | Reports and export | Structured, machine-readable export |
 
@@ -189,6 +196,7 @@ Emulator results are not treated as evidence about physical devices.
 | [docs/session-model.md](docs/session-model.md) | Charge/discharge session ownership (design) |
 | [docs/persistence.md](docs/persistence.md) | What is stored, how it survives, and what is deliberately not stored |
 | [docs/batterystats-decoding.md](docs/batterystats-decoding.md) | The source format decision, what is decoded, and counter units |
+| [docs/ui-navigation.md](docs/ui-navigation.md) | Screens, the history query boundary, and what the wording is not allowed to claim |
 | [docs/security-privacy.md](docs/security-privacy.md) | Security and privacy posture in detail |
 | [docs/provenance.md](docs/provenance.md) | Relationship to prior work |
 | [docs/development.md](docs/development.md) | Build chain notes and conventions |

@@ -189,9 +189,19 @@ class CounterProcessDeathTest {
 
     // ------------------------------------------------------------------------ helpers
 
-    private fun arg(name: String): String =
-        InstrumentationRegistry.getArguments().getString(name)
-            ?: error("$name must be supplied; run tools/counter-process-death-proof.sh")
+    /**
+     * A harness-supplied argument, or a skip.
+     *
+     * Skipping rather than failing is deliberate. These halves are meaningless without the
+     * script that kills the process between them, so a bare `am instrument` over the whole
+     * package used to report three failures that were only ever "you did not run the
+     * harness". A red suite that is expected to be red teaches people to ignore red.
+     */
+    private fun arg(name: String): String {
+        val value = InstrumentationRegistry.getArguments().getString(name)
+        assumeTrue("$name not supplied; run tools/counter-process-death-proof.sh", value != null)
+        return value!!
+    }
 
     /** Decodes the capture the harness pushed, using the production decoder. */
     private fun decodePushedCapture(): com.rmpsdroid.battinsight.batterystats.BatteryStatsCapture {

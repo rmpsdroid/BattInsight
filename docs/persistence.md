@@ -214,8 +214,10 @@ Evaluated:
    restricts the app, or an OEM that restricts it for them, gets silently degraded data -- and
    BattInsight would have no way to tell that from "no transitions happened", which is exactly
    the class of quiet wrongness this project exists to avoid.
-9. **Is the data currently useful?** Not yet. There is no history screen. Nothing consumes
-   precise boundary timestamps.
+9. **Is the data currently useful?** Phase 8 added history and detail screens, so boundary
+   timestamps are now *displayed*. They are still not precise enough for this to change the
+   answer, and the screens say when a boundary was reconstructed rather than observed --
+   which is the honest presentation of the imprecision rather than a reason to remove it.
 10. **Is it reversible?** Yes, cheaply. The schema does not change; only when rows are
     written.
 
@@ -262,8 +264,10 @@ that is a decision rather than an omission.
 Storing a user's data without a way to remove it is a real gap, so this was close. Two things
 decided it:
 
-- **There is nothing to see being cleared.** Without a history screen, the only visible effect
-  is the "Saved on this device" count. Clearing takes it to zero.
+- **There is now something to see being cleared.** Phase 8 added the history screen, so this
+  objection has lapsed. The second one below has not, and no clear-history action was added in
+  Phase 8 either -- adding one belongs with a deliberate decision about what it should and
+  should not remove, not as a side effect of building a list screen.
 - **And it does not stay at zero.** Clearing removes stored history including the engine-state
   row, but the *current* interval is still live in memory, so the next battery broadcast
   writes it back. The count returns to one session almost immediately. That is correct

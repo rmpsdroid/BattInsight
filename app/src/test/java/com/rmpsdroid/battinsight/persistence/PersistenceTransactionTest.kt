@@ -387,6 +387,8 @@ internal class DroppingSnapshotDao(private val real: SessionDao) : SessionDao {
     override suspend fun sessionCount() = real.sessionCount()
     override suspend fun snapshotCount() = real.snapshotCount()
     override suspend fun activeSessions() = real.activeSessions()
+    override suspend fun recentSessions(limit: Int, before: Long?) = real.recentSessions(limit, before)
+    override suspend fun sessionStartWallClock(sessionId: String) = real.sessionStartWallClock(sessionId)
     override suspend fun upsertSnapshots(snapshots: List<SnapshotEntity>) = Unit
     override suspend fun upsertSessions(sessions: List<SessionEntity>) = real.upsertSessions(sessions)
     override suspend fun upsertEngineState(state: EngineStateEntity) = real.upsertEngineState(state)
