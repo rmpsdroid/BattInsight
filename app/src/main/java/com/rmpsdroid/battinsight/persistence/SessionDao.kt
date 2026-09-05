@@ -58,6 +58,44 @@ interface SessionDao {
     @Query("SELECT * FROM battery_sessions WHERE end_snapshot_id IS NULL")
     suspend fun activeSessions(): List<SessionEntity>
 
+    /**
+     * Recent sessions, newest first, joined to their start snapshot for the wall clock.
+     *
+     * The ordering column lives on `battery_snapshots`, not on `battery_sessions`, so this
+     * joins by `start_snapshot_id` -- which is the snapshot table's primary key, making the
+     * lookup an index seek per row rather than a scan.
+     *
+     * SQLite has to sort the joined result because no index covers "sessions ordered by their
+     * start snapshot's wall clock". That is deliberate: adding one would mean a schema change,
+     * and at the scale this table actually reaches -- roughly one session per charge cycle, so
+     * hundreds per year -- sorting is not measurable. An index is worth adding when a
+     * measurement says so, not on principle.
+     *
+     * `snapshot_id` breaks ties. Two sessions can share a wall-clock millisecond, and without
+     * a deterministic tiebreak the same query would return them in different orders on
+     * different runs, which makes paging skip or repeat rows.
+     */
+    @Query(
+        """
+        SELECT s.* FROM battery_sessions s
+        JOIN battery_snapshots start ON start.snapshot_id = s.start_snapshot_id
+        WHERE (:before IS NULL OR start.wall_clock_millis < :before)
+        ORDER BY start.wall_clock_millis DESC, start.snapshot_id DESC
+        LIMIT :limit
+        """,
+    )
+    suspend fun recentSessions(limit: Int, before: Long?): List<SessionEntity>
+
+    /** The start wall clock of a session, used to page further back. */
+    @Query(
+        """
+        SELECT start.wall_clock_millis FROM battery_sessions s
+        JOIN battery_snapshots start ON start.snapshot_id = s.start_snapshot_id
+        WHERE s.session_id = :sessionId
+        """,
+    )
+    suspend fun sessionStartWallClock(sessionId: String): Long?
+
     // ----------------------------------------------------------------------- writes
 
     @Upsert
