@@ -111,11 +111,30 @@ class RoomCounterStore(private val dao: CounterDao) {
             "partial wakelock",
         )?.let { return it }
 
+        // The lock spans the read, the plan and the apply. Wrapping only the write would
+        // leave the stale-plan window open, which is the entire hazard -- see
+        // CounterMutationLock.
         return try {
+            CounterMutationLock.withLock { persistSerially(entity, kernelRows, partialRows, batterySessionId, newCaptureId) }
+        } catch (t: Throwable) {
+            if (t is CancellationException) throw t
+            CounterPersistResult.Failed(classify(t), t.message ?: t.javaClass.simpleName)
+        }
+    }
+
+    /** The critical section of [store]. Runs only under [CounterMutationLock]. */
+    private suspend fun persistSerially(
+        entity: CounterCaptureEntity,
+        kernelRows: List<CounterRowInput>,
+        partialRows: List<CounterRowInput>,
+        batterySessionId: String,
+        newCaptureId: String,
+    ): CounterPersistResult {
+        run {
             val existing = dao.state(batterySessionId)
             if (existing == null) {
                 dao.persistCapture(entity, kernelRows, partialRows, baselineCaptureId = null)
-                CounterPersistResult.Stored(newCaptureId, CounterPersistResult.Role.BASELINE)
+                return CounterPersistResult.Stored(newCaptureId, CounterPersistResult.Role.BASELINE)
             } else {
                 // v2 deleted the superseded capture here. v3 keeps it: that discarded middle
                 // is exactly the series this phase exists to build. What leaves is decided by
@@ -132,11 +151,8 @@ class RoomCounterStore(private val dao: CounterDao) {
                     baselineCaptureId = existing.baselineCaptureId,
                     evictCaptureIds = plan,
                 )
-                CounterPersistResult.Stored(newCaptureId, CounterPersistResult.Role.LATEST)
+                return CounterPersistResult.Stored(newCaptureId, CounterPersistResult.Role.LATEST)
             }
-        } catch (t: Throwable) {
-            if (t is CancellationException) throw t
-            CounterPersistResult.Failed(classify(t), t.message ?: t.javaClass.simpleName)
         }
     }
 
@@ -183,9 +199,14 @@ class RoomCounterStore(private val dao: CounterDao) {
     suspend fun counterRowCounts(): Pair<Int, Int> =
         dao.kernelWakelockRowCount() to dao.partialWakelockRowCount()
 
-    /** Forgets every stored counter. Session history is untouched. */
+    /**
+     * Forgets every stored counter. Session history is untouched.
+     *
+     * Serialised with capture persistence: a clear landing between another caller's plan and
+     * its apply would delete the very captures that plan references.
+     */
     suspend fun clear(): PersistenceResult = try {
-        dao.clearAllCounters()
+        CounterMutationLock.withLock { dao.clearAllCounters() }
         PersistenceResult.Success
     } catch (t: Throwable) {
         if (t is CancellationException) throw t

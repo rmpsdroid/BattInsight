@@ -288,11 +288,28 @@ interface CounterDao {
         upsertKernelWakelocks(kernelRows)
         upsertPartialWakelocks(partialRows)
 
+        // "Latest" means the newest *reading*, not the most recently written row. In
+        // production those coincide, because captures are taken one after another -- but that
+        // is an accident of timing, not a guarantee, and a capture that arrives late with an
+        // older timestamp must not become the latest. The whole-session delta is measured
+        // baseline -> latest, so getting this wrong would subtract the wrong pair.
+        val incumbent = state(capture.batterySessionId)?.latestCaptureId
+            ?.takeIf { it !in evictCaptureIds }
+            ?.let { this.capture(it) }
+        val latest = when {
+            incumbent == null -> capture
+            capture.captureElapsedRealtimeMillis > incumbent.captureElapsedRealtimeMillis -> capture
+            capture.captureElapsedRealtimeMillis < incumbent.captureElapsedRealtimeMillis -> incumbent
+            // Equal timestamps: the same tiebreak the series ordering uses, so the pointer and
+            // the ordered query can never disagree about which capture is last.
+            capture.captureId > incumbent.captureId -> capture
+            else -> incumbent
+        }
         upsertState(
             SessionCounterStateEntity(
                 batterySessionId = capture.batterySessionId,
                 baselineCaptureId = baselineCaptureId ?: capture.captureId,
-                latestCaptureId = capture.captureId,
+                latestCaptureId = latest.captureId,
             ),
         )
 
