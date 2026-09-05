@@ -17,7 +17,8 @@ upgrade there once deleted every user's history.
 | **Session engine** | Snapshot identity, session boundaries, comparability, reconciliation | `SessionEngine`, `BatterySession`, `BatterySnapshot`, `SnapshotComparability`. Pure Kotlin. See `session-model.md` |
 | **Persistence** | Store snapshots durably with explicit schema versioning | `BattInsightDatabase`, `SessionDao`, `RoomSessionStateStore`, explicit entity mappers. Room, schema exported and committed. See `persistence.md` |
 | **Access setup** | Turn a user's access choice into working access, and verify it | `AccessMode`, `SetupAction`, `SetupState`, `AccessSetupCoordinator` |
-| **Presentation** | Screens, chart models, reports | Capability Centre, onboarding and Manage access (Compose) |
+| **Presentation** | Screens, chart models, reports | Capability Centre, onboarding, Manage access, session history and session detail (Compose). No charts. See `ui-navigation.md` |
+| **History query** | Read-only access to stored sessions for presentation | `SessionHistoryRepository`, `RoomSessionHistoryRepository`. Declares no writes |
 
 Packages exist only where they hold real code. Empty packages were not created to complete
 a diagram.
