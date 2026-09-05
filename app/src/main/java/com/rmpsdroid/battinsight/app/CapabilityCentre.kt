@@ -57,6 +57,8 @@ fun CapabilityCentreScreen(
     mode: AccessMode,
     sessionStatus: SessionStatus,
     storageCounts: StorageCounts?,
+    collectorState: CollectorUiState,
+    onCapture: () -> Unit,
     onRefresh: () -> Unit,
     onManageAccess: () -> Unit,
     modifier: Modifier = Modifier,
@@ -94,6 +96,7 @@ fun CapabilityCentreScreen(
         ) {
             item { SectionHeader("Battery session") }
             item { SessionStatusSection(sessionStatus, storageCounts) }
+            item { CoreCollectorSection(collectorState, onCapture) }
 
             item {
                 Spacer(Modifier.height(8.dp))

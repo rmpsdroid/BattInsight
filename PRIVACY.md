@@ -31,6 +31,24 @@ to a tool that reads usage history, and that is the current design.
 
 ## Data storage
 
+### Two different kinds of data, with different rules
+
+BattInsight now handles two categories, and they are treated differently on purpose:
+
+| | Battery session metadata | Privileged batterystats payload |
+|---|---|---|
+| What it is | your charge/discharge intervals and the readings that bound them | the full `dumpsys batterystats` output |
+| Source | the public battery broadcast any app can see | a privileged command, via Shizuku or granted permissions |
+| Contains | levels, temperature, voltage, times | wakelocks, package names, per-app usage |
+| **Written to disk** | **yes** | **never** |
+| Lifetime | kept until you clear the app's data | decoded in memory, released immediately |
+| Logged | no | no |
+
+The privileged payload is the more sensitive of the two by a wide margin, and it is the one
+that is never persisted. It is decoded into counts and a short diagnostic summary, and the
+bytes are discarded with the capture. Nothing derived from it is written to the database:
+the stored schema holds session metadata only.
+
 BattInsight stores two things in its own private storage, and nothing else:
 
 1. **Your access-method choice** — a single string.
@@ -44,6 +62,12 @@ be charted — which is the point of a battery diagnostics tool.
 
 What is stored is BattInsight's own reading of the *public* battery broadcast every
 application on Android can see. It is not per-application usage, and it names no packages.
+
+The privileged batterystats payload **does** contain package names and per-application
+wakelock data. That is exactly why none of it is stored, none of it is logged, and the
+on-screen diagnostic shows counts plus at most five kernel wakelock names rather than the
+list. A full dump of every wakelock and package on your device rendered to the screen is one
+screenshot away from a bug report, so it is not rendered.
 
 **Capability and permission state is still never stored.** Those readings describe the device
 *at a moment* and go stale as soon as anything changes; keeping them would create a second,

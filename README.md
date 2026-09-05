@@ -188,6 +188,7 @@ Emulator results are not treated as evidence about physical devices.
 | [docs/data-sources.md](docs/data-sources.md) | Acquisition formats and prohibited commands |
 | [docs/session-model.md](docs/session-model.md) | Charge/discharge session ownership (design) |
 | [docs/persistence.md](docs/persistence.md) | What is stored, how it survives, and what is deliberately not stored |
+| [docs/batterystats-decoding.md](docs/batterystats-decoding.md) | The source format decision, what is decoded, and counter units |
 | [docs/security-privacy.md](docs/security-privacy.md) | Security and privacy posture in detail |
 | [docs/provenance.md](docs/provenance.md) | Relationship to prior work |
 | [docs/development.md](docs/development.md) | Build chain notes and conventions |
