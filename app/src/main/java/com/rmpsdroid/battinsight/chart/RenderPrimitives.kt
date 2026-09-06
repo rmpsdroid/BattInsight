@@ -45,6 +45,24 @@ data class GapMarker(
     val label: String,
 ) : RenderPrimitive
 
+/**
+ * Observations that happened, but whose battery level the platform did not report.
+ *
+ * Deliberately **not** a [GapMarker]. A gap means nobody was watching; this means somebody was,
+ * and there was no level to record. Manufacturing a `SeriesGapReason` for it would put a
+ * drawing concern into the Phase 9B domain and would tell the user their device went
+ * unobserved when it did not.
+ *
+ * Its only geometric duty is to be a place where no line goes.
+ */
+data class ValueUnavailableMarker(
+    val startX: Float,
+    val endX: Float,
+    /** How many consecutive readings had no level. Consecutive ones collapse into one marker. */
+    val readingCount: Int,
+    val label: String,
+) : RenderPrimitive
+
 /** A measured counter interval. [height] is 0f for a measured zero, which is a real answer. */
 data class IntervalBar(
     val startX: Float,
@@ -104,11 +122,26 @@ object RenderPlanner {
         for (element in model.elements) {
             when (element) {
                 is BatteryChartSegment -> {
-                    val plottable = element.plottablePoints.map { model.normalise(it) }
-                    when {
-                        plottable.isEmpty() -> Unit
-                        plottable.size == 1 -> primitives += PointMarker(plottable.single())
-                        else -> primitives += LineStrip(plottable)
+                    // One strip per *drawable run*, not per segment. A segment may be
+                    // temporally continuous and still contain a reading with no level, and a
+                    // line across that reading would assert a level change nobody measured.
+                    for (run in element.drawableRuns) {
+                        val normalised = run.map { model.normalise(it) }
+                        if (normalised.size == 1) {
+                            primitives += PointMarker(normalised.single())
+                        } else {
+                            primitives += LineStrip(normalised)
+                        }
+                    }
+                    // The readings themselves are still marked, so "we looked and there was no
+                    // level" is visible rather than silently absent.
+                    for (run in element.unavailableRuns) {
+                        primitives += ValueUnavailableMarker(
+                            startX = model.xOf(run.first().elapsedRealtimeMillis),
+                            endX = model.xOf(run.last().elapsedRealtimeMillis),
+                            readingCount = run.size,
+                            label = ValueUnavailableCopy.LABEL,
+                        )
                     }
                 }
                 is BatteryChartGap -> primitives += GapMarker(
@@ -188,3 +221,22 @@ object RenderPlanner {
 /** Position of an elapsed time within the viewport, 0f..1f. */
 fun ChartViewport.xOf(elapsedMillis: Long): Float =
     ((elapsedMillis - xMinMillis).toFloat() / xSpanMillis.toFloat()).coerceIn(0f, 1f)
+
+/**
+ * Wording for a reading whose battery level was unavailable.
+ *
+ * Kept apart from [GapCopy] because the two must never converge. A gap says nobody was
+ * watching; this says somebody was, and the platform reported no level. Neither of them means
+ * the level stayed the same, and neither means zero.
+ */
+object ValueUnavailableCopy {
+    const val LABEL = "Level unavailable"
+
+    fun description(readingCount: Int): String = if (readingCount == 1) {
+        "A reading was taken here, but the device did not report a battery level for it. " +
+            "The line stops rather than guessing what the level was."
+    } else {
+        "$readingCount readings were taken here, but the device did not report a battery " +
+            "level for them. The line stops rather than guessing what the level was."
+    }
+}

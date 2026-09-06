@@ -49,7 +49,7 @@ data class BatteryChartModel(
 
     /** True when there is not enough connected evidence to draw a trend. */
     val hasNoConnectedEvidence: Boolean
-        get() = segments.none { it.points.count { p -> p.percent != null } >= 2 }
+        get() = segments.none { seg -> seg.drawableRuns.any { it.size >= 2 } }
 }
 
 sealed interface BatteryChartElement
@@ -65,6 +65,62 @@ data class BatteryChartSegment(val points: List<BatteryChartPoint>) : BatteryCha
 
     /** Points that can actually be plotted. A point with no percentage has no y position. */
     val plottablePoints: List<BatteryChartPoint> get() = points.filter { it.percent != null }
+
+    /**
+     * The segment split into maximal runs of consecutive **plottable** points.
+     *
+     * This is the correction Phase 9C.1 exists for. Phase 9B decides whether two observations
+     * may be *joined in time* -- same boot, close enough in elapsed realtime, no process death
+     * between them -- and for `80 / unavailable / 78` the answer is legitimately yes: all three
+     * readings were taken, and nothing about the timeline is broken.
+     *
+     * But a battery *line* asserts something narrower than temporal continuity. It asserts that
+     * the level went from one value to the other. Filtering the unavailable reading out and
+     * drawing 80 → 78 through its position would be exactly that claim, made about a moment
+     * where the platform reported no level at all. Measured before the fix, that is precisely
+     * what happened: one strip, `[80, 78]`, spanning x 0.0 to 1.0.
+     *
+     * So an unavailable value **terminates the drawable run** without being a temporal gap. The
+     * observation is not missing -- only its level is, and those are different facts with
+     * different copy.
+     */
+    val drawableRuns: List<List<BatteryChartPoint>>
+        get() {
+            val runs = mutableListOf<List<BatteryChartPoint>>()
+            var current = mutableListOf<BatteryChartPoint>()
+            for (point in points) {
+                if (point.percent != null) {
+                    current += point
+                } else if (current.isNotEmpty()) {
+                    runs += current.toList()
+                    current = mutableListOf()
+                }
+            }
+            if (current.isNotEmpty()) runs += current.toList()
+            return runs
+        }
+
+    /**
+     * Runs of consecutive observations whose level was unavailable.
+     *
+     * Consecutive nulls collapse into one run so the marker is deterministic: `80, null, null,
+     * 77` produces one unavailable region rather than two abutting ones.
+     */
+    val unavailableRuns: List<List<BatteryChartPoint>>
+        get() {
+            val runs = mutableListOf<List<BatteryChartPoint>>()
+            var current = mutableListOf<BatteryChartPoint>()
+            for (point in points) {
+                if (point.percent == null) {
+                    current += point
+                } else if (current.isNotEmpty()) {
+                    runs += current.toList()
+                    current = mutableListOf()
+                }
+            }
+            if (current.isNotEmpty()) runs += current.toList()
+            return runs
+        }
 }
 
 /**
@@ -133,6 +189,14 @@ data class BatteryChartSummary(
     val firstPercent: Int?,
     val lastPercent: Int?,
     val gapDescriptions: List<String>,
+    /**
+     * Readings that were taken but carried no battery level.
+     *
+     * Counted separately from [gapCount] on purpose. A gap means nobody was watching; this
+     * means somebody was, and the platform did not report a level. Folding these into the gap
+     * count would tell the user their device went unobserved when it did not.
+     */
+    val unavailableValueCount: Int = 0,
 )
 
 /** Builds a [BatteryChartModel] from the domain series. Pure. */
@@ -166,12 +230,15 @@ object BatteryChartMapper {
                 observationCount = allPoints.size,
                 // Only runs of two or more plottable points are a *trend*; a lone marker is an
                 // observation, and counting it as a segment would overstate the evidence.
-                connectedSegmentCount = segments.count { it.plottablePoints.size >= 2 },
+                connectedSegmentCount = segments.sumOf { seg ->
+                    seg.drawableRuns.count { it.size >= 2 }
+                },
                 gapCount = gaps.size,
                 observedSpanMillis = viewport.xMaxMillis - viewport.xMinMillis,
                 firstPercent = plottable.firstOrNull()?.percent,
                 lastPercent = plottable.lastOrNull()?.percent,
                 gapDescriptions = gaps.map { it.description },
+                unavailableValueCount = allPoints.count { it.percent == null },
             ),
         )
     }

@@ -28,6 +28,8 @@ import com.rmpsdroid.battinsight.chart.PointMarker
 import com.rmpsdroid.battinsight.chart.RefusedInterval
 import com.rmpsdroid.battinsight.chart.RenderPlanner
 import com.rmpsdroid.battinsight.chart.RenderPrimitive
+import com.rmpsdroid.battinsight.chart.ValueUnavailableCopy
+import com.rmpsdroid.battinsight.chart.ValueUnavailableMarker
 import com.rmpsdroid.battinsight.chart.CounterChartModel
 
 /**
@@ -132,6 +134,21 @@ private fun DrawScope.drawBatteryPrimitive(
             )
         }
 
+        is ValueUnavailableMarker -> {
+            // A short tick low on the axis, marking that a reading happened here with no level
+            // to plot. Deliberately not a full-height band -- that is what a gap looks like,
+            // and this is not a gap. Nothing is drawn between it and its neighbours.
+            val start = primitive.startX * size.width
+            val end = primitive.endX * size.width
+            val y = size.height
+            drawLine(
+                gapColor,
+                Offset(start, y - 8f),
+                Offset(end.coerceAtLeast(start + 2f), y - 8f),
+                strokeWidth = 3f,
+            )
+        }
+
         else -> Unit
     }
 }
@@ -147,12 +164,22 @@ private fun BatteryChartModel.accessibilityDescription(): String {
         else -> "${summary.connectedSegmentCount} connected runs"
     }
     if (summary.gapCount > 0) parts += "${summary.gapCount} breaks"
+    // Reported separately from breaks: a break means nobody was watching, this means somebody
+    // was and the device reported no level. Folding them together would misstate both.
+    if (summary.unavailableValueCount > 0) {
+        parts += "${summary.unavailableValueCount} readings with no battery level"
+    }
     summary.firstPercent?.let { first ->
         summary.lastPercent?.let { last -> parts += "from $first% to $last%" }
     }
     val head = parts.joinToString(", ") + "."
-    return if (summary.gapDescriptions.isEmpty()) head
-    else head + " " + summary.gapDescriptions.joinToString(" ")
+    val details = buildList {
+        addAll(summary.gapDescriptions)
+        if (summary.unavailableValueCount > 0) {
+            add(ValueUnavailableCopy.description(summary.unavailableValueCount))
+        }
+    }
+    return if (details.isEmpty()) head else head + " " + details.joinToString(" ")
 }
 
 /**
@@ -250,6 +277,18 @@ fun BatteryChartLegend(model: BatteryChartModel, formatDuration: (Long) -> Strin
             LegendValue("Latest", model.summary.lastPercent?.let { "$it%" } ?: "Unavailable")
             LegendValue("Observed", formatDuration(model.summary.observedSpanMillis))
             LegendValue("Breaks", model.summary.gapCount.toString())
+            if (model.summary.unavailableValueCount > 0) {
+                LegendValue("No level", model.summary.unavailableValueCount.toString())
+            }
+        }
+        if (model.summary.unavailableValueCount > 0) {
+            Text(
+                text = ValueUnavailableCopy.LABEL + " — " +
+                    ValueUnavailableCopy.description(model.summary.unavailableValueCount),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 2.dp),
+            )
         }
         model.gaps.forEach { gap ->
             Text(
