@@ -154,3 +154,22 @@ persistence is what makes its edge cases testable — the store legitimately rej
 before they could ever be written.
 
 See [`time-series.md`](time-series.md).
+
+## Visualization, from Phase 9C
+
+A `chart` package sits between the pure `series` domain and Compose, and imports neither Room
+nor Canvas.
+
+| Type | Responsibility |
+|---|---|
+| `BatteryChartMapper` | domain series → chart model, preserving segments and gaps exactly |
+| `CounterChartMapper` | domain intervals → interval blocks, per wakelock family |
+| `RenderPlanner` | chart model → `LineStrip` / `PointMarker` / `GapMarker` / `IntervalBar` / `RefusedInterval` |
+| `GapCopy` | exhaustive plain language for all six gap reasons |
+| `SessionChartLoader` | reads the stored series and returns chart models; the only DB touch |
+
+The render primitives exist so that "no line crosses a gap" is a property a JVM test can check
+by counting strips, rather than a claim about anti-aliased pixels. The Compose layer scales,
+strokes and labels; it makes no decision about connectivity, comparability or missing values.
+
+No chart dependency was added. See [`time-series.md`](time-series.md).

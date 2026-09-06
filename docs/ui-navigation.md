@@ -138,8 +138,16 @@ that the UID is the reliable part.
 
 ## Not here yet
 
-No charts of any kind. Phase 9 defines chart semantics once this presentation is stable, and
-adding a sparkline now would commit the project to a sampling model it has not designed.
+Charts arrived in Phase 9C, in Session detail only. History remains a list.
+
+The order on the detail screen is: session summary, battery trend, wakelock interval activity,
+then the existing provenance and diagnostics. Nothing was removed — a session recorded before
+sampling existed shows exactly the detail it always did, because the chart sections are skipped
+rather than shown empty.
+
+Three sparse states are distinguished rather than collapsed into one empty frame: nothing
+sampled, samples whose level the platform never reported, and samples too broken up to form a
+run. Each says which it is.
 
 No export, no notifications, no widgets, no background refresh. Capture happens when someone
 presses the button.

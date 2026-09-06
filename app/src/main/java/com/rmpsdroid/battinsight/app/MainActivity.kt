@@ -40,10 +40,12 @@ import com.rmpsdroid.battinsight.collection.BackendKind
 import com.rmpsdroid.battinsight.batterystats.CounterDeltaEngine
 import com.rmpsdroid.battinsight.batterystats.CounterDeltaResult
 import com.rmpsdroid.battinsight.batterystats.DecodeResult
+import com.rmpsdroid.battinsight.history.HistoryPresentation
 import com.rmpsdroid.battinsight.history.SessionHistoryRepository
 import com.rmpsdroid.battinsight.persistence.BattInsightDatabase
 import com.rmpsdroid.battinsight.persistence.RoomSessionHistoryRepository
 import com.rmpsdroid.battinsight.persistence.CounterPersistResult
+import com.rmpsdroid.battinsight.chart.SessionChartLoader
 import com.rmpsdroid.battinsight.persistence.RoomBatterySampleStore
 import com.rmpsdroid.battinsight.persistence.RoomCounterStore
 import com.rmpsdroid.battinsight.persistence.RoomSessionStateStore
@@ -154,6 +156,20 @@ class BattInsightViewModel(context: Context) : ViewModel() {
 
     private val sampler = BatterySampler(sampleStore)
 
+    /**
+     * Turns a session's stored series into chart models.
+     *
+     * Reads only BattInsight's own database, so a stored chart opens with no privileged access
+     * at all -- the same guarantee Phase 8 made for history.
+     */
+    private val chartLoader = SessionChartLoader(
+        sampleStore = sampleStore,
+        counterCaptures = { counterStore.capturesFor(it) },
+        // The delta engine's own wording, reused rather than reinvented, so a refusal reads the
+        // same in the chart as it does everywhere else.
+        refusalCopy = { HistoryPresentation.unavailableReason(it) },
+    )
+
     /** Diagnostic only: how many samples the active session currently retains. */
     private val _retainedSamples = MutableStateFlow(0)
     val retainedSamples: StateFlow<Int> = _retainedSamples.asStateFlow()
@@ -227,11 +243,22 @@ class BattInsightViewModel(context: Context) : ViewModel() {
         _detailState.value = DetailUiState.Loading
         viewModelScope.launch {
             val detail = runCatching { history.sessionDetail(sessionId) }.getOrNull()
-            _detailState.value = if (detail == null) {
-                DetailUiState.Missing
-            } else {
-                DetailUiState.Loaded(detail, ::formatWallClock, ::resolvePackage)
+            if (detail == null) {
+                _detailState.value = DetailUiState.Missing
+                return@launch
             }
+            // Charts are loaded separately and defensively: a session recorded before Phase 9B
+            // has no series, and the rest of the detail must stay useful without one.
+            val charts = runCatching { chartLoader.load(sessionId) }.getOrNull()
+            _detailState.value = DetailUiState.Loaded(
+                detail = detail,
+                formatWallClock = ::formatWallClock,
+                resolvePackage = ::resolvePackage,
+                batteryChart = charts?.battery,
+                kernelChart = charts?.kernel,
+                applicationChart = charts?.application,
+                formatDuration = HistoryPresentation::duration,
+            )
         }
     }
 

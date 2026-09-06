@@ -248,7 +248,70 @@ wall-clock jump   != elapsed-duration jump
 no interpolation across an unobserved or refused interval
 ```
 
+## Visualization, from Phase 9C
+
+Charts exist now, and they consume the segments and gaps above rather than raw samples.
+
+**The renderer decides nothing.** `BatterySeriesBuilder` already worked out which observations
+may be joined; `BatteryChartMapper` carries that forward as one chart segment per connected
+run; `RenderPlanner` turns each segment into its own `LineStrip`. There is no code path that
+can emit geometry spanning a gap, because the renderer is never given the points that would let
+it try.
+
+**No chart dependency.** A charting library given a list of points connects them — that is what
+they do — and the whole point here is that some points must not be connected. About a hundred
+lines of Compose `Canvas` is cheaper than fighting a library's default, and it keeps the
+discontinuity behaviour ours.
+
+| decision | where it is made |
+|---|---|
+| do these two observations connect? | `BatterySeriesBuilder` (Phase 9B) |
+| is this counter interval comparable? | `CounterDeltaEngine` (Phase 7B) |
+| what may be drawn | `BatteryChartMapper` / `RenderPlanner` |
+| pixels, colours, labels | the Compose renderer, and nothing else |
+
+**Geometry is elapsed realtime.** Observations at 10, 15 and 60 minutes land at their real
+distances, so a long unobserved stretch looks long. Wall clock is used only for labels, and
+each sample's *stored* UTC offset is used rather than the phone's current one — a clock
+correction must move a label, never a point.
+
+**The y scale is fixed at 0–100%.** Autoscaling 47%–52% to the full height would turn a
+five-point drift into a cliff.
+
+**A reading with no battery level also breaks the line — and is not a gap.** Phase 9B decides
+whether two observations may be joined *in time*: same boot, close enough in elapsed realtime,
+no process death between them. For `80% / unavailable / 78%` the answer is legitimately yes, and
+the domain is right. But a battery *line* asserts something narrower — that the level went from
+one value to the other — so drawing straight through the reading where the platform reported no
+level would be a claim with no evidence behind it. Measured before this was corrected, that is
+exactly what happened: one strip, `[80, 78]`, spanning the whole width.
+
+So the presentation layer splits each segment into maximal runs of readings that *have* a level,
+and an unavailable value terminates the current run. The observation is still real — it is
+marked, and it is described as "a reading was taken here, but the device did not report a
+battery level for it". It is deliberately **not** given a `SeriesGapReason`: a gap means nobody
+was watching, and here somebody was. The two are counted separately in the summary for the same
+reason.
+
+**A gap is a break, never a dashed connector.** A dashed line from one side to the other reads
+as an estimated trajectory, which is exactly the claim there is no evidence for. Gaps are drawn
+as vertical rules with an empty band, and each carries plain-language text so the break exists
+for a screen reader too.
+
+**Counter activity is drawn as interval blocks, not a line.** The evidence is the difference
+between two cumulative readings taken when the user pressed refresh: it says how much
+accumulated across the window, not when within it. A line through one point per capture would
+claim continuous sampling that never happened.
+
+**Refused is not zero.** `RefusedInterval` is a separate primitive from `IntervalBar` and
+carries no magnitude field at all, so a refusal cannot be drawn as a zero-height bar even by
+accident. A measured zero *is* drawn — as a baseline tick that says "no increase was recorded,
+that is a measurement, not missing data".
+
+**Every chart has a text fallback**, computed from the same presentation model as the drawing,
+so the words and the picture cannot drift apart.
+
 ## Not here
 
-No charts. No background collection. No automatic privileged capture — `dumpsys batterystats`
+No background collection. No automatic privileged capture — `dumpsys batterystats`
 runs only when a person presses refresh. No package-mapping persistence. No network.
