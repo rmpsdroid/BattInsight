@@ -93,7 +93,7 @@ None of the following exists yet.
 | Wakelocks | Partial (per-application) wakelock attribution |
 | Kernel wakelocks | Kernel wakelock attribution |
 | Alarms | Alarm and scheduled-job attribution |
-| Charts | Trends over time (history and detail screens exist; nothing charts them yet) |
+| Charts | Battery trend and wakelock interval activity, in session detail. Gaps are drawn as gaps |
 | Diagnostics | A redacted diagnostic bundle for troubleshooting |
 | Reports and export | Structured, machine-readable export |
 
