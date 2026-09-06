@@ -211,10 +211,11 @@ class PersistencePolicyTest {
      * Deleting an old one would delete the only evidence a migration can be validated against.
      */
     @Test
-    fun `schema one and schema two are both committed`() {
+    fun `every shipped schema version is still committed`() {
         val dir = File(moduleDir, "schemas/com.rmpsdroid.battinsight.persistence.BattInsightDatabase")
-        assertTrue("schema 1 must not be deleted when 2 arrives", File(dir, "1.json").isFile)
-        assertTrue(File(dir, "2.json").isFile)
-        assertEquals(2, BattInsightDatabase.DATABASE_VERSION)
+        assertTrue("schema 1 must not be deleted when a later one arrives", File(dir, "1.json").isFile)
+        assertTrue("schema 2 must not be deleted when 3 arrives", File(dir, "2.json").isFile)
+        assertTrue(File(dir, "3.json").isFile)
+        assertEquals(3, BattInsightDatabase.DATABASE_VERSION)
     }
 }

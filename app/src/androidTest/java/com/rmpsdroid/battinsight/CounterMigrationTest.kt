@@ -9,6 +9,7 @@ import androidx.sqlite.driver.AndroidSQLiteDriver
 import androidx.sqlite.execSQL
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.rmpsdroid.battinsight.persistence.ALL_MIGRATIONS
 import com.rmpsdroid.battinsight.persistence.BattInsightDatabase
 import com.rmpsdroid.battinsight.persistence.MIGRATION_1_2
 import java.io.File
@@ -118,7 +119,7 @@ class CounterMigrationTest {
             InstrumentationRegistry.getInstrumentation().targetContext,
             BattInsightDatabase::class.java,
             TEST_DB,
-        ).addMigrations(MIGRATION_1_2).build()
+        ).addMigrations(*ALL_MIGRATIONS).build()
 
         db.useWriterConnection { connection ->
             connection.exec(
@@ -135,10 +136,17 @@ class CounterMigrationTest {
                         NULL, 900000, NULL, 0, 1)
                 """.trimIndent(),
             )
+            // v3 keys counter rows by an interned identity rather than by name, so the
+            // identity has to exist first. This is the shape a real write takes now.
+            connection.exec(
+                "INSERT OR IGNORE INTO wakelock_identity (family, uid, name) " +
+                    "VALUES ('KERNEL', -1, 'bt_read')",
+            )
             connection.exec(
                 "INSERT INTO kernel_wakelock_counter " +
-                    "(capture_id, accounting_window, name, total_duration_millis, count) " +
-                    "VALUES ('cap-1', 'SINCE_CHARGED', 'bt_read', 681038, 678)",
+                    "(capture_id, accounting_window, identity_id, total_duration_millis, count) " +
+                    "SELECT 'cap-1', 'SINCE_CHARGED', identity_id, 681038, 678 " +
+                    "  FROM wakelock_identity WHERE family = 'KERNEL' AND name = 'bt_read'",
             )
             connection.exec(
                 "INSERT INTO session_counter_state " +
@@ -169,7 +177,7 @@ class CounterMigrationTest {
             InstrumentationRegistry.getInstrumentation().targetContext,
             BattInsightDatabase::class.java,
             TEST_DB,
-        ).addMigrations(MIGRATION_1_2).build()
+        ).addMigrations(*ALL_MIGRATIONS).build()
 
         db.useWriterConnection { connection ->
             assertEquals(1L, connection.readLong("PRAGMA foreign_keys"))
@@ -213,7 +221,7 @@ class CounterMigrationTest {
             InstrumentationRegistry.getInstrumentation().targetContext,
             BattInsightDatabase::class.java,
             TEST_DB,
-        ).addMigrations(MIGRATION_1_2).build()
+        ).addMigrations(*ALL_MIGRATIONS).build()
 
         db.useWriterConnection { connection ->
             // A capture owned by the second session.

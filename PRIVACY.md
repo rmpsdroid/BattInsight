@@ -59,21 +59,51 @@ Two counter families, and the metadata needed to know whether two captures may b
 | format and platform version, capture time, boot identity | battery history (45,000 lines per capture) |
 | a digest of the payload, and its size | the 42 record types BattInsight does not decode |
 
-**Package names are deliberately not stored.** A numeric UID is a far weaker statement about
-your device than a durable list of the applications on it, and the question this data answers
-— what accumulated during this battery session — does not need the names. They are resolved
-transiently for display and never written down.
+**Package name *mappings* are deliberately not stored.** A numeric UID is a far weaker
+statement about your device than a durable list of the applications on it, and the question
+this data answers — what accumulated during this battery session — does not need the mapping.
+UIDs are resolved to names transiently for display and never written down.
 
-Storage is bounded per battery session, not per refresh: each session keeps a first capture
-and a most recent one. Refreshing a hundred times leaves two, measured at roughly 158 KB for
-a session on a device reporting 68 kernel and 315 application wakelocks.
+**But the wakelock tags themselves often contain package-like text, and that is worth stating
+plainly rather than filing under "metadata".** Measured on a real Android 16 capture: 60.3% of
+application wakelock tags contain a dotted package-style token, and 63 distinct package
+prefixes are recoverable from the tags alone — they are strings like
+`WorkManager:...startWork -> com.google.apps.tiktok.sync.impl.workmanager...`, averaging 79
+characters and reaching 423. That text has always been stored, since the first version that
+kept counters; what changed is described next.
+
+From version 3 those tags are stored **once** in a dictionary table rather than repeated on
+every capture. That is a 4× storage saving and it changes nothing about *what* is held — but
+it does change how long it would otherwise live, from "as long as a counter row needs it" to
+"indefinitely". So the dictionary is swept in the same transaction as every retention pass and
+every clear: a tag with no surviving measurement behind it is deleted. It is a record of what
+ran on your device, and it should not outlive the reason it was recorded.
+
+**Storage is bounded per battery session, not per refresh.**
+
+| | bound | |
+|---|---|---|
+| battery readings per session | **300** | a hard cap; oldest removed first |
+| privileged captures per session | **8** | a target, exceeded only when removing one would destroy evidence that Android's counters restarted |
+
+Both figures are provisional until they can be validated on supported physical hardware. A
+capture measures roughly 25 KB on a device reporting 68 kernel and 408 application wakelocks;
+a battery reading is about 343 bytes.
 
 BattInsight stores two things in its own private storage, and nothing else:
 
 1. **Your access-method choice** — a single string.
-2. **Your battery sessions** — the charge and discharge intervals it has observed, and the
-   battery readings that mark their boundaries: level, temperature, voltage, charge counter,
-   plug source and health, each with the time it was taken.
+2. **Your battery sessions** — the charge and discharge intervals it has observed, the
+   battery readings that mark their boundaries, and (from version 3) a **sampled series** of
+   readings within them: level, temperature, voltage, charge counter, plug source and health,
+   each with the time it was taken.
+
+A denser series is more information about you than a pair of boundary readings, so it is worth
+being direct: a battery-level curve is a presence trace, and a dense enough one shows when you
+sleep, commute and charge. Three things bound it. Sampling happens **only while BattInsight is
+open and visible** — there is no background collection, no service, no scheduled job, and
+nothing that wakes the application when you are not using it. The per-session cap limits how
+much any one interval can accumulate. And none of it leaves the device.
 
 The second is new. Sessions used to be forgotten when the application closed, which made the
 interval you were shown true but disposable. They are now kept so that history can eventually

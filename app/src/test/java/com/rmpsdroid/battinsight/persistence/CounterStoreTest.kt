@@ -186,13 +186,18 @@ class CounterStoreTest {
     // ------------------------------------------------------------- bounded retention
 
     /**
-     * A hundred refreshes leave two captures, not a hundred.
+     * A hundred refreshes converge on the soft target, not on a hundred.
      *
-     * This is the storage contract for this phase, stated as a test so it cannot quietly
-     * become a time series by accident.
+     * v2 kept exactly two -- a baseline and a latest -- and discarded everything between,
+     * which is precisely why there was no series to chart. v3 retains up to
+     * [RoomCounterStore.TARGET_COUNTER_CAPTURES_PER_SESSION], and this run is the easy case:
+     * every capture is monotonically increasing on one boot, so every intermediate passes all
+     * three comparisons and retention can always find something safe to remove.
+     *
+     * The bound still exists. What changed is where it sits, not whether it is enforced.
      */
     @Test
-    fun `a hundred refreshes leave exactly one baseline and one latest`() = runTest {
+    fun `a hundred refreshes converge on the retention target`() = runTest {
         seedSession(SESSION_A)
         repeat(100) { i ->
             val result = store.store(
@@ -202,18 +207,29 @@ class CounterStoreTest {
             assertTrue("refresh $i failed: $result", result.succeeded)
         }
 
-        assertEquals("two logical captures", 2, store.captureCount())
+        val target = RoomCounterStore.TARGET_COUNTER_CAPTURES_PER_SESSION
+        assertEquals("retention converges on the target", target, store.captureCount())
         val (kernelRows, partialRows) = store.counterRowCounts()
-        assertEquals("one counter row per capture", 2, kernelRows)
+        assertEquals("one counter row per retained capture", target, kernelRows)
         assertEquals(0, partialRows)
 
+        // The two anchors are unchanged by any of it: the baseline never moves, and the
+        // latest is always the newest capture stored.
         val state = store.state(SESSION_A)!!
         assertEquals("cap-0", state.baseline.captureId)
         assertEquals("cap-99", state.latest.captureId)
     }
 
+    /**
+     * Intermediate captures are retained now, and eviction leaves nothing behind.
+     *
+     * The v2 version of this test asserted that a superseded capture was deleted on sight.
+     * That is the behaviour Phase 9B removed -- the discarded middle *is* the series. What
+     * survives from the original intent is the part that still matters: whatever retention
+     * does remove, it must not leave orphaned counter rows behind.
+     */
     @Test
-    fun `superseded counter rows are removed, not orphaned`() = runTest {
+    fun `intermediate captures are retained and eviction leaves no orphans`() = runTest {
         seedSession(SESSION_A)
         store.store(capture(kwl = List(50) { kwl("k$it", 1L, 1L) }), SESSION_A, null, GEN, BOOT, "c0")
         store.store(
@@ -225,9 +241,24 @@ class CounterStoreTest {
             SESSION_A, null, GEN, BOOT, "c2",
         )
 
-        // Baseline c0 and latest c2 survive; c1 and its 50 rows are gone.
-        assertEquals(2, store.captureCount())
-        assertEquals(100, store.counterRowCounts().first)
+        // Three captures, all under the target, so the middle one stays.
+        assertEquals("the middle capture is no longer discarded", 3, store.captureCount())
+        assertEquals(150, store.counterRowCounts().first)
+
+        // Push past the target so retention actually runs, then check nothing was orphaned:
+        // rows only exist for captures that still exist.
+        repeat(10) { i ->
+            store.store(
+                capture(elapsed = 20_000L + i * 1_000L, kwl = List(50) { kwl("k$it", 4L + i, 4L) }),
+                SESSION_A, null, GEN, BOOT, "d$i",
+            )
+        }
+        val retained = store.captureCount()
+        assertEquals(
+            "every retained row belongs to a retained capture",
+            retained * 50,
+            store.counterRowCounts().first,
+        )
     }
 
     @Test

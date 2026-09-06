@@ -225,3 +225,5 @@ Version 3 **only**; no "or later" grant is offered.
 BattInsight is **independent** and **not affiliated with, endorsed by, or supported by** the
 authors of BetterBatteryStats or BBS Reloaded. No source from either has been copied, and
 the closed-source successor was never decompiled. Full detail in [NOTICE.md](NOTICE.md).
+
+- [`docs/time-series.md`](docs/time-series.md) — sampled battery series, retention and gap semantics

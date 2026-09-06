@@ -138,7 +138,19 @@ class RoomSessionStateStore(
         )
     }
 
-    override suspend fun clear(): PersistenceResult = write { dao.clearAll() }
+    /**
+     * Forgets everything, serialised against counter persistence.
+     *
+     * `clearAll` removes the counter tables too, so a clear landing between another caller's
+     * eviction plan and its apply would delete the captures that plan names. It takes the same
+     * lock as [RoomCounterStore] for that reason -- the two stores are different classes over
+     * the same tables, which is exactly why the lock is process-wide rather than per-instance.
+     *
+     * Nothing in production calls this today; the lock is here so that stays a fact about the
+     * call graph rather than a load-bearing assumption.
+     */
+    override suspend fun clear(): PersistenceResult =
+        CounterMutationLock.withLock { write { dao.clearAll() } }
 
     /** Row counts, for the diagnostics view. Never reads row contents. */
     suspend fun counts(): StorageCounts? = try {

@@ -395,6 +395,8 @@ internal class DroppingSnapshotDao(private val real: SessionDao) : SessionDao {
     override suspend fun deleteEngineState() = real.deleteEngineState()
     override suspend fun deleteSessionCounterState() = real.deleteSessionCounterState()
     override suspend fun deleteCounterCaptures() = real.deleteCounterCaptures()
+    override suspend fun deleteBatterySamples() = real.deleteBatterySamples()
+    override suspend fun deleteWakelockIdentities() = real.deleteWakelockIdentities()
     override suspend fun deleteSessions() = real.deleteSessions()
     override suspend fun deleteSnapshots() = real.deleteSnapshots()
 }

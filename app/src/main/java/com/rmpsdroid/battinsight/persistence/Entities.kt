@@ -166,6 +166,26 @@ data class SessionEntity(
      * not recoverable from its latest snapshot.
      */
     @ColumnInfo(name = "counter_generation") val counterGeneration: Long,
+    /**
+     * The high-water mark of battery samples this session has lost to retention.
+     *
+     * Null means nothing has ever been evicted. Otherwise it is the **greatest**
+     * `sample_elapsed_realtime_millis` actually deleted -- not the oldest surviving one.
+     * The distinction is the whole point: eviction removes oldest-first, so the greatest
+     * deleted value sits strictly below the oldest retained sample, and a read model can
+     * tell that the space between the session's start and its first retained sample once
+     * held data. Recording the oldest *retained* value instead would place the mark exactly
+     * where the series begins, and the comparison that is supposed to reveal the gap would
+     * never fire.
+     *
+     * Monotonic. A later eviction can only raise it.
+     *
+     * Defaulted so every existing construction site keeps compiling: a session that has
+     * never evicted anything is the normal case, and the column is about what retention did,
+     * not about the interval itself.
+     */
+    @ColumnInfo(name = "battery_samples_evicted_through_elapsed_millis")
+    val batterySamplesEvictedThroughElapsedMillis: Long? = null,
 )
 
 /**

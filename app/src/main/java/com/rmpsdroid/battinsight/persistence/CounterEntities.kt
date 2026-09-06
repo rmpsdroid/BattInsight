@@ -153,25 +153,52 @@ data class CounterCaptureEntity(
  */
 @Entity(
     tableName = "kernel_wakelock_counter",
-    primaryKeys = ["capture_id", "accounting_window", "name"],
+    primaryKeys = ["capture_id", "accounting_window", "identity_id"],
     foreignKeys = [
         ForeignKey(
             entity = CounterCaptureEntity::class,
             parentColumns = ["capture_id"],
             childColumns = ["capture_id"],
             // CASCADE here, unlike everywhere else, and the difference is deliberate: these
-            // rows have no meaning without their capture. A superseded LATEST is deleted as
+            // rows have no meaning without their capture. A superseded capture is deleted as
             // one unit, and leaving orphaned counters behind would be the leak this bounded
             // retention model exists to prevent.
             onDelete = ForeignKey.CASCADE,
         ),
+        ForeignKey(
+            entity = WakelockIdentityEntity::class,
+            parentColumns = ["identity_id"],
+            childColumns = ["identity_id"],
+            // NO_ACTION, not CASCADE: an identity must never be able to take counter rows
+            // with it. The orphan sweep runs the other way round -- identities are removed
+            // only once nothing references them.
+            onDelete = ForeignKey.NO_ACTION,
+        ),
     ],
-    indices = [Index("capture_id")],
+    indices = [
+        /**
+         * "this counter's series across a session" -- an integer lookup, not a name scan.
+         *
+         * Narrowed from `(identity_id, capture_id)` in Phase 9B.1 after measurement: the
+         * composite was no faster at any retained size (55.0 vs 50.2 us at 8 captures, equal
+         * at 24, 198.6 vs 185.7 at 96) and cost 8-14% more file. Without *any* identity index
+         * the planner falls back to a skip-scan over the primary key and the query is 1.2-1.7x
+         * slower, so this one is earning its place.
+         *
+         * There is deliberately no separate `Index("capture_id")`. The primary key is
+         * `(capture_id, accounting_window, identity_id)`, which SQLite implements as an index
+         * whose leftmost column is already `capture_id` -- measured: the by-capture query
+         * produces the same plan shape and the same time either way, while the extra index
+         * cost 17-20% of these tables.
+         */
+        Index("identity_id"),
+    ],
 )
 data class KernelWakelockCounterEntity(
     @ColumnInfo(name = "capture_id") val captureId: String,
     @ColumnInfo(name = "accounting_window") val accountingWindow: String,
-    @ColumnInfo(name = "name") val name: String,
+    /** Resolves to `(KERNEL, -1, name)` in [WakelockIdentityEntity]. */
+    @ColumnInfo(name = "identity_id") val identityId: Long,
     /** Cumulative held time in milliseconds within the window. */
     @ColumnInfo(name = "total_duration_millis") val totalDurationMillis: Long,
     /** Cumulative acquisition count within the window. */
@@ -191,7 +218,7 @@ data class KernelWakelockCounterEntity(
  */
 @Entity(
     tableName = "partial_wakelock_counter",
-    primaryKeys = ["capture_id", "accounting_window", "uid", "name"],
+    primaryKeys = ["capture_id", "accounting_window", "identity_id"],
     foreignKeys = [
         ForeignKey(
             entity = CounterCaptureEntity::class,
@@ -199,14 +226,21 @@ data class KernelWakelockCounterEntity(
             childColumns = ["capture_id"],
             onDelete = ForeignKey.CASCADE,
         ),
+        ForeignKey(
+            entity = WakelockIdentityEntity::class,
+            parentColumns = ["identity_id"],
+            childColumns = ["identity_id"],
+            onDelete = ForeignKey.NO_ACTION,
+        ),
     ],
-    indices = [Index("capture_id")],
+    // Same index reasoning as the kernel table above.
+    indices = [Index("identity_id")],
 )
 data class PartialWakelockCounterEntity(
     @ColumnInfo(name = "capture_id") val captureId: String,
     @ColumnInfo(name = "accounting_window") val accountingWindow: String,
-    @ColumnInfo(name = "uid") val uid: Int,
-    @ColumnInfo(name = "name") val name: String,
+    /** Resolves to `(PARTIAL, uid, name)` in [WakelockIdentityEntity]. */
+    @ColumnInfo(name = "identity_id") val identityId: Long,
     @ColumnInfo(name = "total_duration_millis") val totalDurationMillis: Long,
     @ColumnInfo(name = "count") val count: Long,
 )

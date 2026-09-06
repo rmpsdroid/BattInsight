@@ -9,6 +9,7 @@ import com.rmpsdroid.battinsight.batterystats.SessionCounterState
 import com.rmpsdroid.battinsight.batterystats.StoredCounterCapture
 import com.rmpsdroid.battinsight.collection.BackendIdentity
 import com.rmpsdroid.battinsight.collection.SourceFormat
+import com.rmpsdroid.battinsight.series.CounterRetentionPolicy
 import com.rmpsdroid.battinsight.session.BootIdentity
 import com.rmpsdroid.battinsight.session.CounterGeneration
 import com.rmpsdroid.battinsight.session.PersistenceOutcome
@@ -99,8 +100,8 @@ class RoomCounterStore(private val dao: CounterDao) {
             capture, newCaptureId, batterySessionId, batterySnapshotId,
             counterGeneration, bootIdentity,
         )
-        val kernelRows = capture.kernelWakelocks.map { it.toEntity(newCaptureId) }
-        val partialRows = capture.partialWakelocks.map { it.toEntity(newCaptureId) }
+        val kernelRows = capture.kernelWakelocks.map { it.toRowInput() }
+        val partialRows = capture.partialWakelocks.map { it.toRowInput() }
 
         // Duplicate identities are refused before any write, not resolved by the primary key.
         duplicateIn(kernelRows.map { it.accountingWindow to it.name }, "kernel wakelock")
@@ -110,26 +111,73 @@ class RoomCounterStore(private val dao: CounterDao) {
             "partial wakelock",
         )?.let { return it }
 
+        // The lock spans the read, the plan and the apply. Wrapping only the write would
+        // leave the stale-plan window open, which is the entire hazard -- see
+        // CounterMutationLock.
         return try {
-            val existing = dao.state(batterySessionId)
-            if (existing == null) {
-                dao.establishBaseline(entity, kernelRows, partialRows)
-                CounterPersistResult.Stored(newCaptureId, CounterPersistResult.Role.BASELINE)
-            } else {
-                dao.replaceLatest(
-                    capture = entity,
-                    kernelWakelocks = kernelRows,
-                    partialWakelocks = partialRows,
-                    baselineCaptureId = existing.baselineCaptureId,
-                    supersededCaptureId = existing.latestCaptureId,
-                )
-                CounterPersistResult.Stored(newCaptureId, CounterPersistResult.Role.LATEST)
-            }
+            CounterMutationLock.withLock { persistSerially(entity, kernelRows, partialRows, batterySessionId, newCaptureId) }
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
             CounterPersistResult.Failed(classify(t), t.message ?: t.javaClass.simpleName)
         }
     }
+
+    /** The critical section of [store]. Runs only under [CounterMutationLock]. */
+    private suspend fun persistSerially(
+        entity: CounterCaptureEntity,
+        kernelRows: List<CounterRowInput>,
+        partialRows: List<CounterRowInput>,
+        batterySessionId: String,
+        newCaptureId: String,
+    ): CounterPersistResult {
+        run {
+            val existing = dao.state(batterySessionId)
+            if (existing == null) {
+                dao.persistCapture(entity, kernelRows, partialRows, baselineCaptureId = null)
+                return CounterPersistResult.Stored(newCaptureId, CounterPersistResult.Role.BASELINE)
+            } else {
+                // v2 deleted the superseded capture here. v3 keeps it: that discarded middle
+                // is exactly the series this phase exists to build. What leaves is decided by
+                // retention, below, and only when it is safe to remove.
+                val plan = evictionPlan(
+                    sessionId = batterySessionId,
+                    baselineCaptureId = existing.baselineCaptureId,
+                    incoming = newCaptureId,
+                )
+                dao.persistCapture(
+                    capture = entity,
+                    kernelWakelocks = kernelRows,
+                    partialWakelocks = partialRows,
+                    baselineCaptureId = existing.baselineCaptureId,
+                    evictCaptureIds = plan,
+                )
+                return CounterPersistResult.Stored(newCaptureId, CounterPersistResult.Role.LATEST)
+            }
+        }
+    }
+
+    /**
+     * Which retained captures may safely be removed, delegated to [CounterRetentionPolicy].
+     *
+     * The rule lives in the domain rather than here: it is a policy over the comparability
+     * engine, and keeping it out of persistence is what makes its cases testable directly
+     * instead of only through a store that refuses some of them before they are ever written.
+     */
+    private suspend fun evictionPlan(
+        sessionId: String,
+        baselineCaptureId: String,
+        incoming: String,
+    ): List<String> {
+        val series = dao.capturesFor(sessionId)
+            .map { it.captureId }
+            .filter { it != incoming }
+            .mapNotNull { load(it) }
+        return CounterRetentionPolicy.evictionPlan(series, baselineCaptureId)
+    }
+
+    /** Every retained capture for a session, oldest first. The counter series. */
+    suspend fun capturesFor(sessionId: String): List<StoredCounterCapture> =
+        dao.capturesFor(sessionId).mapNotNull { load(it.captureId) }
 
     /** Reads back baseline and latest for a session, or null when none has been stored. */
     suspend fun state(batterySessionId: String): SessionCounterState? {
@@ -151,9 +199,14 @@ class RoomCounterStore(private val dao: CounterDao) {
     suspend fun counterRowCounts(): Pair<Int, Int> =
         dao.kernelWakelockRowCount() to dao.partialWakelockRowCount()
 
-    /** Forgets every stored counter. Session history is untouched. */
+    /**
+     * Forgets every stored counter. Session history is untouched.
+     *
+     * Serialised with capture persistence: a clear landing between another caller's plan and
+     * its apply would delete the very captures that plan references.
+     */
     suspend fun clear(): PersistenceResult = try {
-        dao.clearAllCounters()
+        CounterMutationLock.withLock { dao.clearAllCounters() }
         PersistenceResult.Success
     } catch (t: Throwable) {
         if (t is CancellationException) throw t
@@ -216,8 +269,8 @@ class RoomCounterStore(private val dao: CounterDao) {
             bootIdentity = bootIdentityOf(row) ?: return null,
             payloadByteCount = row.payloadByteCount,
             warningCount = row.warningCount,
-            kernelWakelocks = dao.kernelWakelocks(captureId).mapNotNull { it.toDomain() },
-            partialWakelocks = dao.partialWakelocks(captureId).mapNotNull { it.toDomain() },
+            kernelWakelocks = dao.resolvedKernelWakelocks(captureId).mapNotNull { it.toDomain() },
+            partialWakelocks = dao.resolvedPartialWakelocks(captureId).mapNotNull { it.toDomain() },
         )
     }
 
@@ -270,16 +323,19 @@ class RoomCounterStore(private val dao: CounterDao) {
         checkinVersionVerified = capture.version.checkinVersion in VERIFIED_CHECKIN_VERSIONS,
     )
 
-    private fun KernelWakelockStat.toEntity(captureId: String) = KernelWakelockCounterEntity(
-        captureId = captureId,
+    /**
+     * Kernel counters carry no UID, so they intern under a sentinel rather than a real one.
+     * Using 0 would collide with the root UID and merge two different identities.
+     */
+    private fun KernelWakelockStat.toRowInput() = CounterRowInput(
         accountingWindow = window.name,
+        uid = WakelockIdentityEntity.KERNEL_UID,
         name = name,
         totalDurationMillis = totalTimeMillis,
         count = count,
     )
 
-    private fun PartialWakelockStat.toEntity(captureId: String) = PartialWakelockCounterEntity(
-        captureId = captureId,
+    private fun PartialWakelockStat.toRowInput() = CounterRowInput(
         accountingWindow = window.name,
         uid = uid,
         name = name,
@@ -287,12 +343,12 @@ class RoomCounterStore(private val dao: CounterDao) {
         count = count,
     )
 
-    private fun KernelWakelockCounterEntity.toDomain(): KernelWakelockStat? =
+    private fun ResolvedKernelRow.toDomain(): KernelWakelockStat? =
         enumOrNull<AggregationWindow>(accountingWindow)?.let {
             KernelWakelockStat(name, totalDurationMillis, count, it)
         }
 
-    private fun PartialWakelockCounterEntity.toDomain(): PartialWakelockStat? =
+    private fun ResolvedPartialRow.toDomain(): PartialWakelockStat? =
         enumOrNull<AggregationWindow>(accountingWindow)?.let {
             PartialWakelockStat(uid, name, totalDurationMillis, count, it)
         }
@@ -307,13 +363,17 @@ class RoomCounterStore(private val dao: CounterDao) {
         else -> PersistenceOutcome.UNKNOWN
     }
 
-    private companion object {
+    companion object {
         /**
          * Checkin versions whose record layouts have been verified against a real capture.
          *
          * The same set the decoder uses, applied more strictly: the decoder warns and carries
          * on, the store refuses to build a durable baseline.
          */
-        val VERIFIED_CHECKIN_VERSIONS = setOf(34, 36)
+        private val VERIFIED_CHECKIN_VERSIONS = setOf(34, 36)
+
+        /** Forwards to the single definition in [CounterRetentionPolicy]. */
+        const val TARGET_COUNTER_CAPTURES_PER_SESSION =
+            CounterRetentionPolicy.TARGET_COUNTER_CAPTURES_PER_SESSION
     }
 }

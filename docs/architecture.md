@@ -130,3 +130,27 @@ It imports exactly one thing from `collection/` — `SourceFormat`, a three-valu
 the acquisition formats — so `CounterSource` can describe which of them produced a snapshot's
 counters. That is a value type, not behaviour; duplicating the enum to claim zero imports
 would be worse than the coupling it removes.
+
+## Sampled series, from Phase 9B
+
+A new pure package, `series`, sits beside `session` and `batterystats` and imports neither Room
+nor Compose.
+
+| Type | Responsibility |
+|---|---|
+| `BatterySeriesBuilder` | turns ordered samples into segments and gaps |
+| `CounterSeriesBuilder` | turns ordered captures into adjacent intervals, via the existing delta engine |
+| `CounterRetentionPolicy` | which captures may safely be evicted — the three-comparison rule |
+| `BatterySampleStore` | the persistence boundary; `RoomBatterySampleStore` implements it |
+| `BatterySampler` | when a reading becomes a stored sample, and the coalescing rule |
+
+The division that matters: **connectivity is decided in the domain, not in the chart.** Phase
+9C receives segments and gaps and has no way to express "join these two points", because two
+segments are never adjacent without a gap between them.
+
+`CounterRetentionPolicy` lives here rather than in the Room store deliberately. It is a policy
+over the comparability engine rather than a persistence detail, and keeping it out of
+persistence is what makes its edge cases testable — the store legitimately rejects some of them
+before they could ever be written.
+
+See [`time-series.md`](time-series.md).

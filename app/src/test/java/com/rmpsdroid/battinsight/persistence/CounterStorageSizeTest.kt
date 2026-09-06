@@ -15,6 +15,7 @@ import com.rmpsdroid.battinsight.session.CounterGeneration
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -120,10 +121,17 @@ class CounterStorageSizeTest {
                 "rows=${store.counterRowCounts()}",
         )
 
-        assertTrue("logical captures stay bounded", store.captureCount() == 2)
+        assertEquals(
+            "logical captures stay bounded at the retention target",
+            RoomCounterStore.TARGET_COUNTER_CAPTURES_PER_SESSION,
+            store.captureCount(),
+        )
+        // Still bounded, at a higher bound. v2 retained 2 captures and v3 retains 8, so the
+        // allowance moves with it -- the property under test is that a hundred refreshes do
+        // not produce a hundred captures' worth of file, not that the number never changes.
         assertTrue(
             "the file must not grow with refreshes: $afterTwo -> $afterHundred",
-            afterHundred < afterTwo * 3,
+            afterHundred < afterTwo * 8,
         )
 
         db.close()
