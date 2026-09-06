@@ -278,6 +278,21 @@ correction must move a label, never a point.
 **The y scale is fixed at 0–100%.** Autoscaling 47%–52% to the full height would turn a
 five-point drift into a cliff.
 
+**A reading with no battery level also breaks the line — and is not a gap.** Phase 9B decides
+whether two observations may be joined *in time*: same boot, close enough in elapsed realtime,
+no process death between them. For `80% / unavailable / 78%` the answer is legitimately yes, and
+the domain is right. But a battery *line* asserts something narrower — that the level went from
+one value to the other — so drawing straight through the reading where the platform reported no
+level would be a claim with no evidence behind it. Measured before this was corrected, that is
+exactly what happened: one strip, `[80, 78]`, spanning the whole width.
+
+So the presentation layer splits each segment into maximal runs of readings that *have* a level,
+and an unavailable value terminates the current run. The observation is still real — it is
+marked, and it is described as "a reading was taken here, but the device did not report a
+battery level for it". It is deliberately **not** given a `SeriesGapReason`: a gap means nobody
+was watching, and here somebody was. The two are counted separately in the summary for the same
+reason.
+
 **A gap is a break, never a dashed connector.** A dashed line from one side to the other reads
 as an estimated trajectory, which is exactly the claim there is no evidence for. Gaps are drawn
 as vertical rules with an empty band, and each carries plain-language text so the break exists
