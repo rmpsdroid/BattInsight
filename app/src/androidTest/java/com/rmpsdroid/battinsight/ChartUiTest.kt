@@ -166,6 +166,30 @@ class ChartUiTest {
             .performScrollTo().assertIsDisplayed()
     }
 
+    @Test
+    fun aReadingWithNoLevelIsExplainedAndNotDrawnThrough() {
+        // Phase 9C.1. All three readings are one temporally continuous segment, and before the
+        // fix the chart drew 80 -> 78 straight through the reading with no level. The screen
+        // must now say what happened, and must not claim the level stayed the same or was zero.
+        compose.setContent {
+            MaterialTheme {
+                SessionDetailScreen(
+                    loaded(listOf(point(0, 80), point(cadence, null), point(cadence * 2, 78))),
+                    onBack = {},
+                )
+            }
+        }
+
+        compose.onNodeWithText("Battery trend").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Level unavailable", substring = true)
+            .performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("did not report a battery level", substring = true)
+            .performScrollTo().assertIsDisplayed()
+        // Not a gap, and not zero.
+        compose.onNodeWithText("No readings were taken", substring = true).assertDoesNotExistSafely()
+        compose.onNodeWithText("0%").assertDoesNotExistSafely()
+    }
+
     // -------------------------------------------------------------------------- counters
 
     @Test
