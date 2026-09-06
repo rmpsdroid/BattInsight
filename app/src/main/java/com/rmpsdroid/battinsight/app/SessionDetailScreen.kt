@@ -21,6 +21,8 @@ import androidx.compose.ui.unit.dp
 import com.rmpsdroid.battinsight.batterystats.CounterDeltaReason
 import com.rmpsdroid.battinsight.history.CounterAvailability
 import com.rmpsdroid.battinsight.history.HistoryPresentation
+import com.rmpsdroid.battinsight.chart.BatteryChartModel
+import com.rmpsdroid.battinsight.chart.CounterChartModel
 import com.rmpsdroid.battinsight.history.SessionDetail
 
 /**
@@ -75,6 +77,11 @@ private fun Loaded(state: DetailUiState.Loaded) {
             HistoryPresentation.batteryPercent(row.endBattery),
         )
     }
+
+    // The chart sections sit between the summary and the existing diagnostics. Nothing below
+    // them changed: a session with no sampled series keeps exactly the detail it had before.
+    state.batteryChart?.let { BatteryTrendSection(it, state.formatDuration) }
+    CounterActivitySection(state.kernelChart, state.applicationChart, state.formatDuration)
 
     Section("How this period began and ended") {
         Field("Began", HistoryPresentation.startDescription(detail.provenance.startTrigger))
@@ -241,6 +248,117 @@ private fun Comparison(detail: SessionDetail) {
     }
 }
 
+/**
+ * The battery trend, or an honest explanation of why there is no trend to draw.
+ *
+ * The three states are genuinely different and are never collapsed: nothing sampled, samples
+ * without a usable level, and samples too broken up to form a run. An empty chart frame would
+ * make the user guess which one they were looking at.
+ */
+@Composable
+private fun BatteryTrendSection(model: BatteryChartModel, formatDuration: (Long) -> String) {
+    Section("Battery trend") {
+        when {
+            model.isEmpty -> Explain(
+                "No sampled battery history yet. Readings are taken while BattInsight is open " +
+                    "and on screen.",
+            )
+
+            model.hasNoUsablePercentage -> Explain(
+                "Battery level was unavailable in these readings, so there is no trend to " +
+                    "draw. The readings themselves were taken.",
+            )
+
+            model.hasNoConnectedEvidence -> {
+                Explain(
+                    "Not enough continuous observations to draw a battery trend. The readings " +
+                        "below are shown where they happened.",
+                )
+                BatteryChart(model)
+                BatteryChartLegend(model, formatDuration)
+            }
+
+            else -> {
+                BatteryChart(model)
+                BatteryChartLegend(model, formatDuration)
+                Explain(
+                    "Levels are shown where they were observed. A break means no reading was " +
+                        "taken, not that the level stayed the same.",
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Wakelock activity per measured interval.
+ *
+ * The copy says "accumulated between readings" rather than anything resembling "ran for", and
+ * that wording is load-bearing: the evidence is the difference between two cumulative counters
+ * taken when the user pressed refresh. It says how much, not when within the window.
+ */
+@Composable
+private fun CounterActivitySection(
+    kernel: CounterChartModel?,
+    application: CounterChartModel?,
+    formatDuration: (Long) -> String,
+) {
+    if (kernel == null && application == null) return
+    if (kernel?.isEmpty != false && application?.isEmpty != false) {
+        Section("Wakelock activity over time") {
+            Explain(
+                "Only one set of statistics was captured during this period, so there is no " +
+                    "interval to compare. Capture again to measure what accumulates between " +
+                    "readings.",
+            )
+        }
+        return
+    }
+
+    Section("Wakelock activity over time") {
+        Explain(
+            "Each block covers the period between two captures you took, and shows how much " +
+                "wakelock time accumulated across that whole period.",
+        )
+        kernel?.takeIf { !it.isEmpty }?.let { CounterFamilyBlock("Kernel wakelocks", it, formatDuration) }
+        application?.takeIf { !it.isEmpty }?.let { CounterFamilyBlock("Application wakelocks", it, formatDuration) }
+    }
+}
+
+@Composable
+private fun CounterFamilyBlock(
+    title: String,
+    model: CounterChartModel,
+    formatDuration: (Long) -> String,
+) {
+    Text(title, style = MaterialTheme.typography.titleSmall)
+    CounterIntervalChart(model)
+    model.comparable.forEach { interval ->
+        Field(
+            formatDuration(interval.spanMillis) + " interval",
+            if (interval.isMeasuredZero) {
+                // Mandatory distinction: a measured zero is a result, not an absence.
+                "No increase recorded — that is a measurement, not missing data"
+            } else {
+                HistoryPresentation.duration(interval.totalDurationMillis) +
+                    " across " + interval.totalCount + " acquisitions"
+            },
+        )
+    }
+    model.refused.forEach { interval ->
+        Field(formatDuration(interval.spanMillis) + " interval", interval.description)
+    }
+}
+
+@Composable
+private fun Explain(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
 @Composable
 private fun Section(title: String, content: @Composable () -> Unit) {
     Card(Modifier.fillMaxWidth()) {
@@ -309,5 +427,18 @@ sealed interface DetailUiState {
         val formatWallClock: (Long) -> String,
         /** Current lookup only. Returns null when the UID resolves to nothing today. */
         val resolvePackage: (Int) -> String?,
+        /**
+         * The sampled battery series, already divided into what may be drawn and what may not.
+         *
+         * Null when this build has no series for the session -- a session recorded before
+         * Phase 9B, for instance. The rest of the screen must stay useful without it, which is
+         * why it is nullable rather than an empty model: "no chart section at all" and "a chart
+         * section saying nothing was sampled" are different, and only the first is right for a
+         * session that predates sampling.
+         */
+        val batteryChart: BatteryChartModel? = null,
+        val kernelChart: CounterChartModel? = null,
+        val applicationChart: CounterChartModel? = null,
+        val formatDuration: (Long) -> String = { "" },
     ) : DetailUiState
 }
