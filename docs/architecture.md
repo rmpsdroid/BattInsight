@@ -117,6 +117,26 @@ a race.
 
 `SessionCoordinator` sequences observations and publishes state. It owns no decisions.
 
+### Where process-lifetime facts live
+
+Purity has one consequence worth naming: the engine cannot know whether *this process* just
+started, because that is a platform fact and the engine holds no platform state. The Android
+side has to supply it, and it has to supply it at the right scope.
+
+`ProcessStartGate` is that state, and it is deliberately process-scoped rather than
+Activity- or `ViewModel`-scoped. An Activity is destroyed and recreated on rotation; a
+`ViewModel` outlives that but is cleared when the Activity finishes, so a back-press and
+relaunch inside one living process would look like a new process to either of them. Only the
+process itself has the lifetime of the claim being made, and static state in a loaded class
+has exactly that lifetime — created with the process, gone with it, never written to disk.
+
+This is what keeps `SessionTrigger.APP_START` honest. It means "the process started" and is
+issued once per process; a UI that merely came back into view reports `APP_VISIBLE`. The
+series builder turns the first into `PROCESS_RESTART` and lets the second fall through to the
+ordinary spacing test, so a backgrounded application is never reported to its user as a
+crashed one. See `docs/time-series.md` for the gap semantics and the Phase 10A.1 measurement
+that forced the distinction.
+
 ## What the session engine must never depend on
 
 It holds no reference to the capability or access layers, which is the strongest form that

@@ -51,9 +51,21 @@ process death survive with an unobserved interval between them.
 
 | source | trigger | rule |
 |---|---|---|
-| becoming visible | `APP_START` | always, after the engine reconciles the reading |
+| process start (first visibility in the process) | `APP_START` | always, after the engine reconciles the reading |
+| becoming visible again (same process) | `APP_VISIBLE` | always, after the engine reconciles the reading |
 | cadence tick | `PERIODIC` | only if nothing was stored for that session within the cadence |
 | accepted broadcast | the observation's own trigger | always |
+
+**`APP_START` means the process started, and nothing else.** The sampling call lives inside
+`repeatOnLifecycle(STARTED)`, so it runs once at process start *and again every time the UI
+returns to view*. Those are different facts, and only the first says anything about process
+lifetime. `ProcessStartGate` is process-scoped state that hands out the start announcement
+exactly once; every later resume is `APP_VISIBLE`.
+
+The scope matters and is the whole point: an Activity is recreated on rotation, and a
+`ViewModel` is cleared when the Activity finishes, so neither can decide "did this *process*
+just start". Process death is the reset, because process death is the event being described —
+nothing is persisted and there is nothing to clear.
 
 The asymmetry is deliberate: a broadcast carries a real level change, which is more
 informative than a timer asking the same question, so a tick is coalesced away rather than the
@@ -184,7 +196,7 @@ something.
 | reason | what it says |
 |---|---|
 | `NOT_OBSERVED` | nobody was sampling — the app was not visible |
-| `PROCESS_RESTART` | the process died; the next sample announced itself as a fresh start |
+| `PROCESS_RESTART` | the process died; the next sample announced itself as a fresh **process** start |
 | `DIFFERENT_BOOT` | the device rebooted, so there is no shared axis at all |
 | `CONTINUITY_UNPROVEN` | continuity could not be proven **either way** |
 | `NOT_RETAINED` | samples existed and retention deleted them — ours, not the device's |
@@ -193,6 +205,22 @@ something.
 Guarantees the builder makes, so the chart cannot break them: a gap is never a point and never
 a zero; two segments are never adjacent without a gap between them; a segment never spans two
 boots; a one-point segment is legal and renders as a point.
+
+**A backgrounded application is not a crashed one.** `PROCESS_RESTART` is reached only from
+`APP_START`, and `APP_START` is emitted at most once per process, so a same-process resume can
+never produce it. A resume arrives as `APP_VISIBLE`, which carries no claim about process
+lifetime: it falls through to the ordinary spacing test and becomes `NOT_OBSERVED` only if
+enough time genuinely passed unobserved, or no gap at all if it did not.
+
+Before Phase 10A.1 every resume announced `APP_START`, and a Samsung SM-M156B holding pid 31963
+for an entire session was told "BattInsight stopped running and started again". The stored row
+that caused it — `elapsed=1953275349 trigger=APP_START`, 187 seconds after the previous
+reading — was a healthy app being reopened.
+
+**Readings recorded before that fix are not rewritten.** A pre-fix `APP_START` row may be a
+genuine process start or a same-process resume, and there is no durable evidence that separates
+them after the fact. Guessing would replace one false claim with another, so old rows keep their
+original interpretation and the guarantee applies to readings taken from Phase 10A.1 onward.
 
 ### Boot comparison has exactly one implementation
 
