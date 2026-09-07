@@ -117,6 +117,34 @@ a race.
 
 `SessionCoordinator` sequences observations and publishes state. It owns no decisions.
 
+### Initialisation is a property of the coordinator, not a caller convention
+
+`SessionCoordinator.begin()` reads persisted state and reconciles it against a current reading;
+`observe()` accepts an ordinary reading against state already in memory. The order matters
+absolutely, because `SessionEngine.accept` starts a fresh interval when it is handed a state with
+no session — which is the correct answer for a genuinely new install and the wrong one for a
+process that simply restarted.
+
+That ordering used to be documented ("call once per process, before observe") and left to
+callers. Production could not honour it. The start-up reading and the lifecycle-visible sampler
+live in two independently scheduled coroutines — `viewModelScope` and `lifecycleScope` — and
+Phase 10A.2 measured a Samsung SM-M156B splitting one continuous discharge interval into two open
+sessions when the sampler won the race: `accept()` saw an empty state, opened a new interval on
+top of a perfectly readable stored one, and the stored interval was then never reconciled and
+never closed.
+
+So the coordinator enforces it. **Whichever of `begin()` or `observe()` arrives first performs the
+load-and-reconcile**, under the same mutex that already serialises observations; every later call
+is an ordinary observation. An early reading is not discarded — reconciliation is defined as
+"saved state plus a current reading", and an early observation is exactly such a reading.
+
+Two details carry weight. There is no waiting primitive, so there is nothing to dead-lock on,
+nothing whose cancellation could strand other observers, and no timeout to tune. And the
+coordinator counts itself initialised only when a reconciliation was actually *adopted*: a reading
+rejected as contradictory, or a state that failed to persist, adopts nothing, so the next
+observation reconciles again rather than being accepted against empty state — which would
+reintroduce the split one step later.
+
 ### Where process-lifetime facts live
 
 Purity has one consequence worth naming: the engine cannot know whether *this process* just
