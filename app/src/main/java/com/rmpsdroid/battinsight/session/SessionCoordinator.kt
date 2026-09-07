@@ -72,12 +72,54 @@ class SessionCoordinator(
     val status: StateFlow<SessionStatus> = _status.asStateFlow()
 
     /**
+     * Whether persisted state has been read and reconciled in this coordinator's lifetime.
+     *
+     * Guarded by [mutex]; every read and write happens inside it, so no separate memory
+     * barrier is needed and no check-then-act window exists.
+     */
+    private var initialised = false
+
+    /**
      * Establishes state at start-up from saved state plus a current reading.
      *
-     * Call once per process, before [observe]. Everything the application knows about
-     * transitions it did not witness comes from here.
+     * Everything the application knows about transitions it did not witness comes from here.
+     *
+     * **Ordering is enforced, not requested.** This used to document "call once per process,
+     * before [observe]" and rely on callers to honour it. Phase 10A.2 measured a Samsung
+     * SM-M156B splitting one continuous discharge interval into two open sessions because
+     * production could not honour it: the start-up reading and the lifecycle-visible sampler
+     * run in two independently scheduled coroutines, and when the sampler won,
+     * [SessionEngine.accept] saw [SessionEngineState.empty] and started a fresh interval on
+     * top of a perfectly readable stored one.
+     *
+     * Initialisation is therefore a property of this type rather than a convention. Whichever
+     * of [begin] or [observe] arrives first performs the load-and-reconcile; a later [begin]
+     * is an ordinary observation, because the process has already started exactly once.
      */
     suspend fun begin(observation: BatteryObservation): TransitionResult = mutex.withLock {
+        if (initialised) acceptLocked(observation) else initialiseLocked(observation)
+    }
+
+    /**
+     * Accepts a live observation.
+     *
+     * If this is the first call to reach the coordinator, it performs initialisation rather
+     * than being accepted against empty state -- see [begin]. The observation is not
+     * discarded: reconciliation is defined as "saved state plus a current reading", and an
+     * early observation is exactly such a reading.
+     */
+    suspend fun observe(observation: BatteryObservation): TransitionResult = mutex.withLock {
+        if (initialised) acceptLocked(observation) else initialiseLocked(observation)
+    }
+
+    /**
+     * Reads persisted state and reconciles [observation] against it. Call under [mutex].
+     *
+     * Deliberately not a suspending wait on some other coroutine's initialisation: there is
+     * nothing to wait for and therefore nothing to dead-lock on, nothing to cancel, and no
+     * timeout to tune. The first caller through either door does the work.
+     */
+    private suspend fun initialiseLocked(observation: BatteryObservation): TransitionResult {
         val stored = store.load()
 
         // An unreadable store is not an empty one. Reconciling from null would start a fresh
@@ -87,15 +129,19 @@ class SessionCoordinator(
         val saved = (stored as? StoredState.Loaded)?.state
 
         val transition = engine.reconcile(saved, observation)
-        commit(transition, observation, loadFailure)
-        transition.result
+        // Only when the reconciliation was actually adopted. A rejected reading (a
+        // contradictory monotonic clock) or a failed write adopts nothing, and calling the
+        // coordinator "initialised" then would hand the next observation an empty state --
+        // reintroducing the very split this fix removes, one step later.
+        initialised = commit(transition, observation, loadFailure)
+        return transition.result
     }
 
-    /** Accepts a live observation. */
-    suspend fun observe(observation: BatteryObservation): TransitionResult = mutex.withLock {
+    /** Accepts an observation against already-initialised state. Call under [mutex]. */
+    private suspend fun acceptLocked(observation: BatteryObservation): TransitionResult {
         val transition = engine.accept(state, observation)
         commit(transition, observation)
-        transition.result
+        return transition.result
     }
 
     /** Accepts an observation without suspending the caller. For broadcast receivers. */
@@ -129,16 +175,22 @@ class SessionCoordinator(
      * the alternative, carrying on in memory, would produce an application confidently
      * describing history it will not have after the next process death.
      */
+    /**
+     * @return whether [transition] was adopted into [state]. Initialisation depends on this:
+     *   a reconciliation that was rejected or could not be saved has adopted nothing, so the
+     *   coordinator is *not* initialised and must reconcile again rather than accept the next
+     *   observation against empty state.
+     */
     private suspend fun commit(
         transition: SessionTransition,
         observation: BatteryObservation,
         loadFailure: StoredState.Failed? = null,
-    ) {
+    ): Boolean {
         // A rejected observation leaves state untouched, and must not be saved or published
         // as though it had been accepted.
         if (transition.result is TransitionResult.Rejected) {
             publish(_status.value.lastObservation, transition.result, _status.value.persistence, loadFailure)
-            return
+            return false
         }
 
         val result = store.persist(transition)
@@ -146,11 +198,12 @@ class SessionCoordinator(
             // Nothing is adopted. The previous state remains authoritative, and the failure
             // is visible rather than swallowed.
             publish(_status.value.lastObservation, _status.value.lastResult, result, loadFailure)
-            return
+            return false
         }
 
         state = transition.state
         publish(observation, transition.result, result, loadFailure)
+        return true
     }
 
     private fun publish(
