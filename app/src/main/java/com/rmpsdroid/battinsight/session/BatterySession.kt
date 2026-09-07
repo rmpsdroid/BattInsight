@@ -4,8 +4,24 @@ import java.util.UUID
 
 /** Why an observation was taken, or why a session boundary happened. */
 enum class SessionTrigger {
-    /** The application process started and read current state. */
+    /**
+     * The application process started and read current state.
+     *
+     * **Once per process.** `BatterySeriesBuilder` reads this as evidence the previous process
+     * died, so it must not be emitted by a living process that merely became visible again --
+     * that is [APP_VISIBLE]. See `ProcessStartGate`.
+     */
     APP_START,
+
+    /**
+     * The UI became observable again inside a process that was already running.
+     *
+     * A real reading taken at a real moment, and **not** evidence of anything about process
+     * lifetime. Sampling stops when the UI is hidden and resumes when it returns, so this marks
+     * the resumption; whether that leaves a gap is decided by the spacing between readings, not
+     * by this trigger.
+     */
+    APP_VISIBLE,
 
     /** `ACTION_POWER_CONNECTED` was observed. */
     POWER_CONNECTED,
@@ -44,7 +60,8 @@ enum class SessionTrigger {
     /** Whether this trigger came from something actually observed, rather than inferred. */
     val isObserved: Boolean
         get() = this == POWER_CONNECTED || this == POWER_DISCONNECTED ||
-            this == BATTERY_CHANGED || this == APP_START || this == PERIODIC || this == MANUAL
+            this == BATTERY_CHANGED || this == APP_START || this == APP_VISIBLE ||
+            this == PERIODIC || this == MANUAL
 }
 
 /**
