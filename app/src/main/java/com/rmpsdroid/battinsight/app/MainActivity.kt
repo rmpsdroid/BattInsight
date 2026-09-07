@@ -56,6 +56,7 @@ import com.rmpsdroid.battinsight.persistence.StorageCounts
 import com.rmpsdroid.battinsight.platform.GrantedAppProcessRunner
 import com.rmpsdroid.battinsight.setup.AccessSetupCoordinator
 import com.rmpsdroid.battinsight.setup.GrantStep
+import com.rmpsdroid.battinsight.session.ProcessStartGate
 import com.rmpsdroid.battinsight.session.SessionCoordinator
 import com.rmpsdroid.battinsight.session.SessionStatus
 import com.rmpsdroid.battinsight.session.CounterGeneration
@@ -86,7 +87,15 @@ sealed interface Screen {
  * Wiring is manual on purpose: swapping backends in tests needs constructor injection, and
  * a dependency-injection framework would not yet earn its weight.
  */
-class BattInsightViewModel(context: Context) : ViewModel() {
+class BattInsightViewModel(
+    context: Context,
+    /**
+     * Injected so a test can hand in a fresh gate to represent a fresh process. Production
+     * always uses the process-scoped one -- a per-ViewModel gate would reintroduce the very
+     * defect this fixes, because a ViewModel is narrower than a process.
+     */
+    private val processStartGate: ProcessStartGate = ProcessStartGate.forProcess,
+) : ViewModel() {
 
     private val appContext = context.applicationContext
     private val gateway = AndroidShizukuGateway(appContext)
@@ -459,9 +468,26 @@ class BattInsightViewModel(context: Context) : ViewModel() {
      * Called when the UI becomes visible again. The reading is reconciled through the session
      * engine first, so a boundary that happened while nothing was watching is accounted for
      * before the sample is attributed.
+     *
+     * ## Which trigger this reading carries
+     *
+     * This method runs inside `repeatOnLifecycle(STARTED)`, so it runs once when the process
+     * starts *and again every time the UI comes back into view*. Those are different facts and
+     * the reading says which one it is: the first call in a process claims
+     * [SessionTrigger.APP_START], every later call is [SessionTrigger.APP_VISIBLE].
+     *
+     * Before Phase 10A.1 every call announced `APP_START`, and `BatterySeriesBuilder` reads
+     * that as proof the previous process died -- so a healthy backgrounded app was reported to
+     * its user as one that had stopped running and started again. Measured on a Samsung
+     * SM-M156B holding pid 31963 across the whole session.
      */
     suspend fun sampleOnBecomingVisible() {
-        val observation = batterySource.readCurrent(SessionTrigger.APP_START) ?: return
+        val trigger = if (processStartGate.claimStart()) {
+            SessionTrigger.APP_START
+        } else {
+            SessionTrigger.APP_VISIBLE
+        }
+        val observation = batterySource.readCurrent(trigger) ?: return
         sessions.observe(observation)
         recordSample { sampler.onObservation(activeSessionId(), observation, generation()) }
     }

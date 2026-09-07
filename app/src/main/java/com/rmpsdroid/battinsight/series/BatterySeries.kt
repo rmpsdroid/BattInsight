@@ -238,9 +238,18 @@ object BatterySeriesBuilder {
             return SeriesGapReason.MALFORMED
         }
 
-        // A sample that announces itself as a fresh start is evidence the process died. Asked
-        // before the spacing test so the more specific reason wins: "BattInsight restarted" is
-        // a better answer than "nobody was sampling", and both are true.
+        // A sample that announces itself as a fresh *process* start is evidence the previous
+        // process died. Asked before the spacing test so the more specific reason wins:
+        // "BattInsight restarted" is a better answer than "nobody was sampling", and both are
+        // true.
+        //
+        // This inference is only sound because APP_START is emitted at most once per process
+        // -- see `ProcessStartGate`. Phase 10A.1 fixed the case where it was not: a living
+        // process that merely became visible again also announced APP_START, and this line
+        // then told the user it had died. A same-process resume now arrives as
+        // SessionTrigger.APP_VISIBLE, which is deliberately *not* handled here: it carries no
+        // claim about process lifetime, so it falls through to the spacing test below and
+        // becomes NOT_OBSERVED only if enough time actually passed unobserved.
         if (next.trigger == SessionTrigger.APP_START) return SeriesGapReason.PROCESS_RESTART
 
         if (next.elapsedRealtimeMillis - previous.elapsedRealtimeMillis > toleranceMillis) {

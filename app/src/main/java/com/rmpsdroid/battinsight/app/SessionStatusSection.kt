@@ -191,6 +191,7 @@ private fun describeResult(result: TransitionResult?): String = when (result) {
 
 private fun describeTrigger(trigger: SessionTrigger): String = when (trigger) {
     SessionTrigger.APP_START -> "app opened"
+    SessionTrigger.APP_VISIBLE -> "app back in view"
     SessionTrigger.POWER_CONNECTED -> "power connected"
     SessionTrigger.POWER_DISCONNECTED -> "power disconnected"
     SessionTrigger.BATTERY_CHANGED -> "battery update"

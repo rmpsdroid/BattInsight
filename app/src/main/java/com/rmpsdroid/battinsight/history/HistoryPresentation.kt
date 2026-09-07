@@ -99,6 +99,7 @@ object HistoryPresentation {
         SessionTrigger.POWER_DISCONNECTED -> "Unplugged"
         SessionTrigger.BATTERY_CHANGED -> "Battery reading changed"
         SessionTrigger.APP_START -> "BattInsight opened"
+        SessionTrigger.APP_VISIBLE -> "BattInsight came back into view"
         SessionTrigger.PERIODIC -> "Routine reading"
         SessionTrigger.MANUAL -> "You asked for a reading"
         SessionTrigger.RECOVERY -> "Recovered after BattInsight was not running"
