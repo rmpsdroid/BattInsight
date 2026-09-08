@@ -134,11 +134,22 @@ private fun Failed(state: CollectorUiState.Failed) {
 /**
  * What a failed capture means, in the user's terms.
  *
- * No exception text, no record tags, no field indices. The `TRUNCATED` wording matters most:
- * a partial capture that reported "no kernel wakelocks" would be a false statement about the
- * device, and it is the exact defect Phase 3.1 found.
+ * No exception text, no record tags, no field indices. Two of these matter more than the
+ * rest, and for the same reason.
+ *
+ * `TRUNCATED` must not let "we stopped reading" be read as "the device has none" -- the exact
+ * defect Phase 3.1 found.
+ *
+ * `EXECUTION_FAILED` must not overcorrect. Its first wording said "Your device is fine",
+ * which reads as reassurance and is not something the outcome establishes: all that was
+ * measured is that BattInsight did not finish reading. Replacing the old false claim about
+ * the platform with a new unsupported claim about the device would have repeated the mistake
+ * in the opposite direction, so this says only what happened and what to try.
+ *
+ * `internal` rather than private so the wording is pinned by a test that calls it, instead of
+ * by one that reads this file as text.
  */
-private fun describeFailure(outcome: DecodeOutcome): String = when (outcome) {
+internal fun describeFailure(outcome: DecodeOutcome): String = when (outcome) {
     DecodeOutcome.PERMISSION_DENIAL_PAYLOAD ->
         "Android refused the request. Set up access again from Manage access."
     DecodeOutcome.TRUNCATED ->
@@ -147,9 +158,9 @@ private fun describeFailure(outcome: DecodeOutcome): String = when (outcome) {
     DecodeOutcome.EMPTY ->
         "Android returned nothing at all."
     DecodeOutcome.EXECUTION_FAILED ->
-        "The capture did not complete, so there is nothing to show. Your device is fine — " +
-            "BattInsight could not finish reading from it. Try again, and if it keeps " +
-            "happening check access from Manage access."
+        "The capture did not complete, so there is nothing to show. BattInsight could not " +
+            "finish reading the statistics. Try again, and if it keeps happening check " +
+            "access from Manage access."
     DecodeOutcome.UNSUPPORTED_VERSION ->
         "This device reports battery statistics in a version BattInsight has not been " +
             "checked against, so it will not guess at the numbers."
