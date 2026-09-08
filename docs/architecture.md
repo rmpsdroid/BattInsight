@@ -104,6 +104,76 @@ exists to avoid. Captured output is bounded; payloads are never logged.
 
 ---
 
+## How privileged output crosses the process boundary, from Phase 10A.3
+
+The Shizuku backend runs its command in a process this application does not own, so the
+capture has to cross a boundary to get here. Until Phase 10A.3 it crossed **by value**: the
+`executeProbe` reply Bundle carried stdout as a byte array. That worked until a device's
+statistics outgrew it.
+
+A Samsung SM-M156B on Android 15 produced 1,066,676 bytes of `dumpsys batterystats -c`. The
+reply parcel measured 1,048,800 bytes, the kernel refused the transaction, and the
+application decoded the zero bytes that were left and told the user *"Android returned
+nothing at all"* — about a platform that had just produced a megabyte of healthy output. The
+last capture that had worked was 852,557 bytes, at 81% of the ceiling. Nothing had changed
+in the application; the device's own statistics had simply grown past a number nobody had
+chosen for a reason that would still hold.
+
+**The reply now carries no payload.** It carries a protocol version and three
+`ParcelFileDescriptor`s — standard output, standard error, and a completion frame — and every
+byte travels through a pipe. Pipes are flow controlled by the kernel, so how large a capture
+may be is no longer a function of a transaction budget. Raising the old ceiling would only
+have moved the same failure to a larger device.
+
+### Completion is framed, because a stream cannot carry an exit code
+
+A payload stream ends at end-of-file, and end-of-file is also what a process being killed
+produces. So the exit status, the truncation flags, the byte counts and any failure reason
+are written as one small fixed record on a third pipe, **after** both payload streams have
+ended and the child has been reaped.
+
+Its absence is the point. A privileged process that dies mid-capture closes its descriptors
+without writing a frame, so "the command finished and produced this much" and "the bytes
+stopped and nobody recorded why" are distinguishable — and the second is reported as a
+failure rather than handed to the decoder. A prefix of checkin output parses perfectly well
+as far as it goes; its missing sections would read as sections the device does not have, and
+the kernel wakelock block sits at 84–88% of the payload.
+
+### Both sides drain concurrently, and only one side needed to
+
+A process writing to a full pipe is suspended until somebody reads. A producer that drains a
+child's stdout to its end before touching stderr therefore deadlocks against any command that
+writes enough to standard error first: each side waits for the other. **Both backends had
+exactly that shape**, independently, and both were corrected. The reader drains its two pipes
+in parallel too, though that is not what prevents the deadlock — it is there so the reader
+does not depend on how the producer happens to be threaded.
+
+### The ceiling is a memory bound now, not a transport one
+
+`CaptureLimits.MAX_CAPTURE_BYTES` is 16 MiB and is the **only** ceiling; the two backends
+previously declared 1 MiB each, independently, which is how they came to disagree about one
+device — the granted-app path truncated honestly while the Shizuku path failed outright.
+
+16 MiB is chosen from what the application must hold, not from what a parcel will carry. The
+decoder takes a `ByteArray`, so one complete capture is materialised once in this process;
+accumulating it peaks at roughly three times its own size while the buffer doubles and is
+copied, so about 48 MiB transiently at the ceiling. That is fifteen times the largest payload
+ever measured on real hardware, so no genuine capture approaches it, and anything that does
+is a runaway producer — stopped, and reported as truncated rather than decoded as complete.
+
+**This is not a constant-memory pipeline, and it should not be described as one.** The
+privileged process is constant-memory: it copies through one fixed buffer and never holds the
+capture. This process still holds the finished payload once, because that is what the decoder
+boundary takes.
+
+### Setup actions kept the old mechanism deliberately
+
+`executeSetupAction` is the only entry point that changes device state, and its whole output
+is a line or two from `pm`. It still replies by value, bounded at 64 KiB. Giving the narrower
+method the more capable transport would have widened a security surface to no purpose.
+
+---
+
 ## Why the session engine is pure
 
 `SessionEngine` has no Android import, no clock, no I/O and no randomness beyond an
