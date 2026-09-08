@@ -1,13 +1,15 @@
 package com.rmpsdroid.battinsight.platform
 
+import com.rmpsdroid.battinsight.collection.CaptureLimits
 import com.rmpsdroid.battinsight.collection.ExecutionOutput
 import com.rmpsdroid.battinsight.collection.ProbeCommand
 import com.rmpsdroid.battinsight.collection.ProcessRunner
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
-import java.io.InputStream
 
 /**
  * Runs a [ProbeCommand] in our own process, under the application UID.
@@ -15,6 +17,16 @@ import java.io.InputStream
  * Whether anything useful comes back depends on the three permissions being granted; the
  * runner does not check that, it just reports what happened. Interpretation belongs to the
  * capability layer.
+ *
+ * ## No Binder, but the same completeness policy
+ *
+ * This backend never had the transport defect Phase 10A.3 fixed -- the child process is
+ * spawned in this process, so its output never crosses a Binder. It did have the same
+ * *ceiling*, declared independently at the same 1 MiB, which is how the two backends came to
+ * disagree about one device: at 1,066,676 measured bytes this path returned a truncated
+ * prefix and reported it honestly, while the Shizuku path failed outright and reported the
+ * platform as empty. Both now read [CaptureLimits.MAX_CAPTURE_BYTES], so a payload is either
+ * complete on both backends or truncated on both.
  */
 class GrantedAppProcessRunner : ProcessRunner {
 
@@ -30,8 +42,21 @@ class GrantedAppProcessRunner : ProcessRunner {
                     // nothing user-supplied. See ProbeCommand for why this matters.
                     val argv = listOf(BIN_PREFIX + command.argv.first()) + command.argv.drop(1)
                     val p = ProcessBuilder(argv).start().also { process = it }
-                    val out = p.inputStream.readBoundedAndClose()
-                    val err = p.errorStream.readBoundedAndClose()
+
+                    // Concurrently, not one after the other. A pipe holds a fixed amount
+                    // before it blocks, so draining stdout to its end first can hang on a
+                    // command that filled stderr and is waiting for room -- each side
+                    // blocked on the other. The privileged backend had the identical
+                    // pattern and was corrected at the same time.
+                    val (out, err) = coroutineScope {
+                        val outRead = async(Dispatchers.IO) {
+                            CaptureLimits.readBoundedAndClose(p.inputStream)
+                        }
+                        val errRead = async(Dispatchers.IO) {
+                            CaptureLimits.readBoundedAndClose(p.errorStream)
+                        }
+                        outRead.await() to errRead.await()
+                    }
                     val code = p.waitFor()
                     ExecutionOutput(
                         command = command,
@@ -66,37 +91,3 @@ class GrantedAppProcessRunner : ProcessRunner {
         val TIMEOUT_MARKER = "timed out".toByteArray()
     }
 }
-
-/** Bytes read, plus whether the ceiling stopped us before the stream ended. */
-internal class BoundedCapture(val bytes: ByteArray, val truncated: Boolean)
-
-/**
- * Reads a stream with a hard ceiling, reporting whether it was cut short.
- *
- * Battery statistics checkin output is around 800 KB and there is no reason to hold more
- * than the capability layer inspects; the cap also bounds a misbehaving process. But a
- * truncated payload must never be mistaken for one that genuinely lacked the evidence a
- * probe was looking for, so truncation is reported rather than silently swallowed.
- */
-internal fun InputStream.readBoundedAndClose(limit: Int = MAX_CAPTURE_BYTES): BoundedCapture =
-    use { input ->
-        val buffer = ByteArray(BUFFER)
-        val sink = java.io.ByteArrayOutputStream(minOf(limit, INITIAL_SINK))
-        var total = 0
-        var truncated = false
-        while (true) {
-            if (total >= limit) {
-                truncated = input.read() != -1
-                break
-            }
-            val read = input.read(buffer, 0, minOf(buffer.size, limit - total))
-            if (read <= 0) break
-            sink.write(buffer, 0, read)
-            total += read
-        }
-        BoundedCapture(sink.toByteArray(), truncated)
-    }
-
-private const val MAX_CAPTURE_BYTES = 1024 * 1024
-private const val BUFFER = 16 * 1024
-private const val INITIAL_SINK = 64 * 1024

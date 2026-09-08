@@ -18,12 +18,28 @@ interface IProbeService {
     void destroy() = 16777114;
 
     /**
-     * Runs one whitelisted read-only probe.
+     * Starts one whitelisted read-only probe and hands back the streams it will write to.
+     *
+     * The reply carries **no payload**. It carries a protocol version and three
+     * ParcelFileDescriptors -- standard output, standard error, and a completion frame --
+     * and the command's bytes travel only through those pipes.
+     *
+     * This is the Phase 10A.3 correction. The previous contract returned stdout inside the
+     * reply Bundle as a byte array, marshalled by value; on a device whose checkin output
+     * had grown to 1,066,676 bytes the reply parcel measured 1,048,800 bytes and the
+     * transaction was refused, which the application then misreported to the user as the
+     * platform having returned nothing. A pipe is flow controlled by the kernel, so payload
+     * size is no longer a function of any transaction budget.
+     *
+     * The transaction id is unchanged, but the reply shape is not, so SERVICE_VERSION is
+     * bumped: an older remote must be restarted rather than reused. The protocol version in
+     * the reply is the second line of defence, because AIDL does not verify signatures.
      *
      * @param probeId an identifier from the application's ProbeCommand whitelist. Anything
-     *                else is refused without being executed.
-     * @return a Bundle carrying exitCode, hasExitCode, stdout, stderr, truncated,
-     *         durationMillis and, when refused, a rejection reason.
+     *                else is refused without being executed, and the reply then carries a
+     *                rejection reason and no descriptors.
+     * @return a Bundle carrying protocolVersion, stdoutFd, stderrFd and statusFd, or a
+     *         rejection reason.
      */
     Bundle executeProbe(String probeId) = 1;
 
@@ -38,8 +54,15 @@ interface IProbeService {
      * There is no package parameter. This interface cannot be used to change the
      * permissions of any other application, and cannot express any other pm subcommand.
      *
+     * Deliberately still returns its output **by value**, and deliberately did not inherit
+     * the streaming contract. A setup action's entire output is a line or two from pm, far
+     * below any transaction budget, and a general streaming entry point is a wider surface
+     * than this method needs. Its transaction id, its argument and its semantics are all
+     * unchanged by Phase 10A.3.
+     *
      * @param actionId an identifier from the application's SetupAction whitelist.
-     * @return a Bundle of the same shape executeProbe returns.
+     * @return a Bundle carrying exitCode, hasExitCode, stdout, stderr, truncated,
+     *         durationMillis and, when refused, a rejection reason.
      */
     Bundle executeSetupAction(String actionId) = 2;
 }

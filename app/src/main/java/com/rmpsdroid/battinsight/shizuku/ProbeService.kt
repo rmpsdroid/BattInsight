@@ -1,9 +1,11 @@
 package com.rmpsdroid.battinsight.shizuku
 
 import android.os.Bundle
+import android.os.ParcelFileDescriptor
+import com.rmpsdroid.battinsight.collection.CaptureLimits
 import com.rmpsdroid.battinsight.collection.ProbeCommand
 import com.rmpsdroid.battinsight.setup.SetupAction
-import java.io.InputStream
+import java.util.Collections
 import kotlin.system.exitProcess
 
 /**
@@ -24,21 +26,49 @@ import kotlin.system.exitProcess
  *
  * [executeProbe] takes a probe **identifier**, never a command. The identifier is resolved
  * against the same sealed whitelist the application uses, and anything unrecognised is
- * refused without being executed. There is no command string parameter, no `sh -c`, and no
- * interpolation: the argument vector comes from [ProbeCommand] and nothing else.
+ * refused without being executed. There is no command string parameter, no shell, and no
+ * interpolation: the argument vector comes from [ProbeCommand] and nothing else. Streaming
+ * changed how the *output* comes back; it did not widen what may be run.
  *
  * [executeSetupAction] is the same shape but stricter, because it *changes* state. Its
  * identifier resolves to a [SetupAction], whose argument vector names BattInsight's own
  * package as a compile-time constant. There is no package parameter on the interface, so
- * this service cannot be asked to alter another application's permissions.
+ * this service cannot be asked to alter another application's permissions. It kept the
+ * bounded by-value reply rather than inheriting the streaming path: its output is a line or
+ * two, and a state-changing entry point should have the narrower mechanism, not the more
+ * capable one.
+ *
+ * ## Output leaves through pipes, never in the reply
+ *
+ * See [ProbeStreamProtocol] for the contract and for the measured failure that produced it.
+ * This class creates the pipes and hands the read ends back; [ProbeProcessStreamer] does the
+ * work, on an ordinary thread, so the Binder transaction returns as soon as the streams
+ * exist rather than being held for the length of a capture.
  *
  * This service must not use Android `Context` APIs. It runs standalone, not as a normal
  * application component.
  */
 class ProbeService : IProbeService.Stub() {
 
-    /** Shizuku tears the service down through this. */
+    /**
+     * Children currently running on behalf of a caller.
+     *
+     * Tracked because a child process is not a thread: it outlives the process that spawned
+     * it. Without this, tearing the service down mid-capture would leave a privileged
+     * `dumpsys` running with nothing attached to it, which is exactly the kind of residue a
+     * non-daemon service exists to avoid.
+     */
+    private val live: MutableSet<Process> = Collections.synchronizedSet(mutableSetOf())
+
+    /**
+     * Shizuku tears the service down through this.
+     *
+     * Any capture still in flight ends without a completion frame, which the application
+     * reads as a typed failure rather than as a short but successful capture -- the
+     * distinction [ProbeCompletion.Missing] exists to make.
+     */
     override fun destroy() {
+        synchronized(live) { live.toList() }.forEach { runCatching { it.destroyForcibly() } }
         exitProcess(0)
     }
 
@@ -46,14 +76,11 @@ class ProbeService : IProbeService.Stub() {
         val started = System.currentTimeMillis()
 
         // Resolve the identifier against the whitelist. An unknown id is refused here,
-        // before any process is created.
+        // before any process is created and before any pipe exists.
         val command = ProbeCommand.all.firstOrNull { it.id == probeId }
-            ?: return rejected(
-                "unknown probe id",
-                System.currentTimeMillis() - started,
-            )
+            ?: return rejectedStream("unknown probe id")
 
-        return run(command.argv, started)
+        return openStream(command.argv, started)
     }
 
     /**
@@ -68,89 +95,149 @@ class ProbeService : IProbeService.Stub() {
         val started = System.currentTimeMillis()
 
         val action = SetupAction.forId(actionId)
-            ?: return rejected(
-                "unknown setup action id",
-                System.currentTimeMillis() - started,
-            )
+            ?: return rejectedValue("unknown setup action id", System.currentTimeMillis() - started)
 
-        return run(action.argv, started)
+        return runBounded(action.argv, started)
     }
 
-    /** Runs a fixed argument vector that a whitelist produced. Never a caller's string. */
-    private fun run(argv: List<String>, started: Long): Bundle {
+    /**
+     * Starts a whitelisted argument vector and returns the pipes it will write to.
+     *
+     * Returns as soon as the process exists and the streams are wired, so the Binder thread
+     * is never held for the duration of a capture.
+     */
+    private fun openStream(argv: List<String>, started: Long): Bundle {
+        var out: Array<ParcelFileDescriptor>? = null
+        var err: Array<ParcelFileDescriptor>? = null
+        var status: Array<ParcelFileDescriptor>? = null
+        var process: Process? = null
+        try {
+            // index 0 is the read end, which the caller gets; index 1 is ours to write.
+            out = ParcelFileDescriptor.createPipe()
+            err = ParcelFileDescriptor.createPipe()
+            status = ParcelFileDescriptor.createPipe()
+
+            // Fixed argument vector from a whitelist. No shell, no interpolation.
+            val child = ProcessBuilder(argv).start()
+            process = child
+            live.add(child)
+
+            val stdoutSink = ParcelFileDescriptor.AutoCloseOutputStream(out[1])
+            val stderrSink = ParcelFileDescriptor.AutoCloseOutputStream(err[1])
+            val statusSink = ParcelFileDescriptor.AutoCloseOutputStream(status[1])
+
+            // Our own copies of the read ends. The reply duplicates each descriptor as it is
+            // marshalled, so the caller's copies are independent of these; these are closed
+            // once the capture is over, which is necessarily after the reply was written.
+            val ourReadEnds = listOf(out[0], err[0], status[0])
+
+            Thread({
+                try {
+                    ProbeProcessStreamer().stream(child, stdoutSink, stderrSink, statusSink, started)
+                } finally {
+                    live.remove(child)
+                    ourReadEnds.forEach { runCatching { it.close() } }
+                }
+            }, "battinsight-probe-stream").start()
+
+            return Bundle().apply {
+                putInt(ProbeStreamProtocol.KEY_PROTOCOL, ProbeStreamProtocol.PROTOCOL_VERSION)
+                putParcelable(ProbeStreamProtocol.KEY_STDOUT_FD, out[0])
+                putParcelable(ProbeStreamProtocol.KEY_STDERR_FD, err[0])
+                putParcelable(ProbeStreamProtocol.KEY_STATUS_FD, status[0])
+            }
+        } catch (t: Throwable) {
+            process?.let {
+                live.remove(it)
+                runCatching { it.destroyForcibly() }
+            }
+            listOf(out, err, status).forEach { pipe ->
+                pipe?.forEach { runCatching { it.close() } }
+            }
+            return rejectedStream("remote execution failed: " + t.javaClass.simpleName)
+        }
+    }
+
+    /**
+     * Runs a short, state-changing action and returns its output by value.
+     *
+     * Kept separate from [openStream] on purpose. This path is bounded at
+     * [CaptureLimits.MAX_MESSAGE_BYTES] -- small enough that the reply can never approach a
+     * transaction budget -- so the one entry point that changes device state does not gain a
+     * general streaming mechanism it has no use for.
+     *
+     * Both streams are read on separate threads even at this size, because which of them a
+     * command fills first is not something the caller gets to know.
+     */
+    private fun runBounded(argv: List<String>, started: Long): Bundle {
         var process: Process? = null
         return try {
             // Fixed argument vector from a whitelist. No shell, no interpolation.
-            process = ProcessBuilder(argv).start()
-            val stdoutCapture = process.inputStream.readBounded()
-            val stderrCapture = process.errorStream.readBounded()
-            val exit = process.waitFor()
+            val child = ProcessBuilder(argv).start()
+            process = child
+            live.add(child)
+
+            var outCapture = ByteArray(0)
+            var outTruncated = false
+            val reader = Thread {
+                val captured = CaptureLimits.readBoundedAndClose(
+                    child.inputStream, CaptureLimits.MAX_MESSAGE_BYTES,
+                )
+                outCapture = captured.bytes
+                outTruncated = captured.truncated
+            }
+            reader.start()
+            val errCapture = CaptureLimits.readBoundedAndClose(
+                child.errorStream, CaptureLimits.MAX_MESSAGE_BYTES,
+            )
+            reader.join()
+            val exit = child.waitFor()
+            live.remove(child)
+
             Bundle().apply {
-                putBoolean(KEY_HAS_EXIT, true)
-                putInt(KEY_EXIT, exit)
-                putByteArray(KEY_STDOUT, stdoutCapture.bytes)
-                putByteArray(KEY_STDERR, stderrCapture.bytes)
-                putBoolean(KEY_TRUNCATED, stdoutCapture.truncated || stderrCapture.truncated)
-                putLong(KEY_DURATION, System.currentTimeMillis() - started)
+                putBoolean(ProbeStreamProtocol.KEY_HAS_EXIT, true)
+                putInt(ProbeStreamProtocol.KEY_EXIT, exit)
+                putByteArray(ProbeStreamProtocol.KEY_STDOUT, outCapture)
+                putByteArray(ProbeStreamProtocol.KEY_STDERR, errCapture.bytes)
+                putBoolean(ProbeStreamProtocol.KEY_TRUNCATED, outTruncated || errCapture.truncated)
+                putLong(ProbeStreamProtocol.KEY_DURATION, System.currentTimeMillis() - started)
             }
         } catch (t: Throwable) {
-            process?.destroyForcibly()
-            rejected(
-                "remote execution failed: ${t.javaClass.simpleName}",
+            process?.let {
+                live.remove(it)
+                runCatching { it.destroyForcibly() }
+            }
+            rejectedValue(
+                "remote execution failed: " + t.javaClass.simpleName,
                 System.currentTimeMillis() - started,
             )
         }
     }
 
-    private fun rejected(reason: String, durationMillis: Long): Bundle = Bundle().apply {
-        putBoolean(KEY_HAS_EXIT, false)
-        putByteArray(KEY_STDOUT, ByteArray(0))
-        putByteArray(KEY_STDERR, reason.toByteArray())
-        putBoolean(KEY_TRUNCATED, false)
-        putLong(KEY_DURATION, durationMillis)
-        putString(KEY_REJECTION, reason)
+    /** A refused streaming call. Carries a reason and, deliberately, no descriptors. */
+    private fun rejectedStream(reason: String): Bundle = Bundle().apply {
+        putInt(ProbeStreamProtocol.KEY_PROTOCOL, ProbeStreamProtocol.PROTOCOL_VERSION)
+        putString(ProbeStreamProtocol.KEY_REJECTION, reason)
     }
 
-    /** Bytes read, plus whether the ceiling stopped us before the stream ended. */
-    private class Capture(val bytes: ByteArray, val truncated: Boolean)
-
-    /**
-     * Reads a stream up to a hard ceiling, reporting whether it was cut short.
-     *
-     * Truncation must be reported rather than silently swallowed: a payload cut off before
-     * the evidence a probe is looking for would otherwise be indistinguishable from one
-     * that genuinely lacked it.
-     */
-    private fun InputStream.readBounded(limit: Int = MAX_CAPTURE_BYTES): Capture = use { input ->
-        val buffer = ByteArray(BUFFER)
-        val sink = java.io.ByteArrayOutputStream(INITIAL_SINK)
-        var total = 0
-        var truncated = false
-        while (true) {
-            if (total >= limit) {
-                // Something remains unread, so the capture is short.
-                truncated = input.read() != -1
-                break
-            }
-            val read = input.read(buffer, 0, minOf(buffer.size, limit - total))
-            if (read <= 0) break
-            sink.write(buffer, 0, read)
-            total += read
-        }
-        Capture(sink.toByteArray(), truncated)
+    private fun rejectedValue(reason: String, durationMillis: Long): Bundle = Bundle().apply {
+        putBoolean(ProbeStreamProtocol.KEY_HAS_EXIT, false)
+        putByteArray(ProbeStreamProtocol.KEY_STDOUT, ByteArray(0))
+        putByteArray(ProbeStreamProtocol.KEY_STDERR, reason.toByteArray())
+        putBoolean(ProbeStreamProtocol.KEY_TRUNCATED, false)
+        putLong(ProbeStreamProtocol.KEY_DURATION, durationMillis)
+        putString(ProbeStreamProtocol.KEY_REJECTION, reason)
     }
 
     companion object {
-        const val KEY_HAS_EXIT = "hasExitCode"
-        const val KEY_EXIT = "exitCode"
-        const val KEY_STDOUT = "stdout"
-        const val KEY_STDERR = "stderr"
-        const val KEY_TRUNCATED = "truncated"
-        const val KEY_DURATION = "durationMillis"
-        const val KEY_REJECTION = "rejection"
-
-        private const val MAX_CAPTURE_BYTES = 1024 * 1024
-        private const val BUFFER = 16 * 1024
-        private const val INITIAL_SINK = 64 * 1024
+        // Retained so existing callers and tests keep naming one set of keys. The protocol
+        // itself lives in ProbeStreamProtocol, which both halves of the contract share.
+        const val KEY_HAS_EXIT = ProbeStreamProtocol.KEY_HAS_EXIT
+        const val KEY_EXIT = ProbeStreamProtocol.KEY_EXIT
+        const val KEY_STDOUT = ProbeStreamProtocol.KEY_STDOUT
+        const val KEY_STDERR = ProbeStreamProtocol.KEY_STDERR
+        const val KEY_TRUNCATED = ProbeStreamProtocol.KEY_TRUNCATED
+        const val KEY_DURATION = ProbeStreamProtocol.KEY_DURATION
+        const val KEY_REJECTION = ProbeStreamProtocol.KEY_REJECTION
     }
 }

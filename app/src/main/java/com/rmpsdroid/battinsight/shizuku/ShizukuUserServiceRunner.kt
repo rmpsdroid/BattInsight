@@ -4,6 +4,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.ServiceConnection
 import android.os.IBinder
+import android.os.ParcelFileDescriptor
 import com.rmpsdroid.battinsight.collection.ExecutionOutput
 import com.rmpsdroid.battinsight.collection.ProbeCommand
 import com.rmpsdroid.battinsight.collection.ProcessRunner
@@ -110,22 +111,14 @@ class ShizukuUserServiceRunner(
                     val bundle = remote.executeProbe(command.id)
                         ?: return@withTimeout failure(command, "no result from user service", started)
 
-                    bundle.getString(ProbeService.KEY_REJECTION)?.let { reason ->
+                    bundle.getString(ProbeStreamProtocol.KEY_REJECTION)?.let { reason ->
                         return@withTimeout failure(command, reason, started)
                     }
 
-                    val hasExit = bundle.getBoolean(ProbeService.KEY_HAS_EXIT, false)
-                    ExecutionOutput(
-                        command = command,
-                        exitCode = if (hasExit) bundle.getInt(ProbeService.KEY_EXIT) else null,
-                        stdout = bundle.getByteArray(ProbeService.KEY_STDOUT) ?: ByteArray(0),
-                        stderr = bundle.getByteArray(ProbeService.KEY_STDERR) ?: ByteArray(0),
-                        durationMillis = bundle.getLong(
-                            ProbeService.KEY_DURATION,
-                            System.currentTimeMillis() - started,
-                        ),
-                        truncated = bundle.getBoolean(ProbeService.KEY_TRUNCATED, false),
-                    )
+                    collectStream(bundle, command, started)
+                        ?: return@withTimeout failure(
+                            command, "the privileged service did not open the capture streams", started,
+                        )
                 }
             } catch (t: TimeoutCancellationException) {
                 failure(command, "probe timed out", started, timedOut = true)
@@ -138,6 +131,73 @@ class ShizukuUserServiceRunner(
                 failure(command, "remote execution failed: " + describe(t), started)
             }
         }
+
+    /**
+     * Drains one streamed capture into an [ExecutionOutput].
+     *
+     * ## Why a partial capture is not returned as a short success
+     *
+     * When the completion frame never arrives -- the privileged process died, or was torn
+     * down mid-capture -- whatever bytes did arrive are of unknown completeness. They are
+     * dropped and the attempt is reported as a failure rather than being handed to the
+     * decoder. A prefix of checkin output parses perfectly well as far as it goes, and its
+     * missing late sections would be read as sections the device does not have; the kernel
+     * wakelock block sits at 84-88% of the payload, so that is the likely thing to lose.
+     *
+     * A remote that reported a problem gets its exit code discarded for the same reason. A
+     * process that could not be run properly has no meaningful exit status, and reporting
+     * one would let the classifier treat a broken execution as a clean one.
+     *
+     * @return null when the reply carried no descriptors at all.
+     */
+    private suspend fun collectStream(
+        bundle: android.os.Bundle,
+        command: ProbeCommand,
+        started: Long,
+    ): ExecutionOutput? {
+        val protocol = bundle.getInt(ProbeStreamProtocol.KEY_PROTOCOL, 0)
+        if (protocol != ProbeStreamProtocol.PROTOCOL_VERSION) {
+            // Shizuku restarts a service whose version differs, so reaching here means that
+            // did not happen. AIDL does not verify signatures, so saying what the mismatch
+            // is beats reporting the missing descriptor it would otherwise look like.
+            return failure(
+                command,
+                "the privileged service speaks stream protocol " + protocol +
+                    ", this build speaks " + ProbeStreamProtocol.PROTOCOL_VERSION,
+                started,
+            )
+        }
+
+        val fdType = ParcelFileDescriptor::class.java
+        val stdoutFd = bundle.getParcelable(ProbeStreamProtocol.KEY_STDOUT_FD, fdType)
+        val stderrFd = bundle.getParcelable(ProbeStreamProtocol.KEY_STDERR_FD, fdType)
+        val statusFd = bundle.getParcelable(ProbeStreamProtocol.KEY_STATUS_FD, fdType)
+        if (stdoutFd == null || stderrFd == null || statusFd == null) {
+            listOfNotNull(stdoutFd, stderrFd, statusFd).forEach { runCatching { it.close() } }
+            return null
+        }
+
+        val result = ProbeStreamReader.consume(
+            ParcelFileDescriptor.AutoCloseInputStream(stdoutFd),
+            ParcelFileDescriptor.AutoCloseInputStream(stderrFd),
+            ParcelFileDescriptor.AutoCloseInputStream(statusFd),
+        )
+
+        return when (val completion = result.completion) {
+            is ProbeCompletion.Missing -> failure(command, completion.reason, started)
+            is ProbeCompletion.Complete -> {
+                val broke = completion.failure.isNotEmpty()
+                ExecutionOutput(
+                    command = command,
+                    exitCode = if (completion.hasExitCode && !broke) completion.exitCode else null,
+                    stdout = if (broke) ByteArray(0) else result.stdout,
+                    stderr = if (broke) completion.failure.toByteArray() else result.stderr,
+                    durationMillis = completion.durationMillis,
+                    truncated = result.truncated,
+                )
+            }
+        }
+    }
 
     /**
      * Performs one typed setup action with shell identity.
@@ -169,20 +229,20 @@ class ShizukuUserServiceRunner(
                 val bundle = remote.executeSetupAction(action.id)
                     ?: return@withTimeout SetupOutcome.Refused("no result from user service")
 
-                bundle.getString(ProbeService.KEY_REJECTION)?.let { reason ->
+                bundle.getString(ProbeStreamProtocol.KEY_REJECTION)?.let { reason ->
                     return@withTimeout SetupOutcome.Refused(reason)
                 }
 
-                val hasExit = bundle.getBoolean(ProbeService.KEY_HAS_EXIT, false)
-                val stderr = bundle.getByteArray(ProbeService.KEY_STDERR) ?: ByteArray(0)
-                val stdout = bundle.getByteArray(ProbeService.KEY_STDOUT) ?: ByteArray(0)
+                val hasExit = bundle.getBoolean(ProbeStreamProtocol.KEY_HAS_EXIT, false)
+                val stderr = bundle.getByteArray(ProbeStreamProtocol.KEY_STDERR) ?: ByteArray(0)
+                val stdout = bundle.getByteArray(ProbeStreamProtocol.KEY_STDOUT) ?: ByteArray(0)
                 // pm reports failures on either stream; both are short, so both are kept.
                 val message = (decode(stderr) + " " + decode(stdout)).trim()
                 SetupOutcome.Executed(
-                    exitCode = if (hasExit) bundle.getInt(ProbeService.KEY_EXIT) else null,
+                    exitCode = if (hasExit) bundle.getInt(ProbeStreamProtocol.KEY_EXIT) else null,
                     message = message,
                     durationMillis = bundle.getLong(
-                        ProbeService.KEY_DURATION,
+                        ProbeStreamProtocol.KEY_DURATION,
                         System.currentTimeMillis() - started,
                     ),
                 )
@@ -327,8 +387,17 @@ class ShizukuUserServiceRunner(
         t.javaClass.simpleName + (t.message?.let { ": " + it.take(MESSAGE_LIMIT) } ?: "")
 
     private companion object {
-        /** Bumped when the remote contract changes, so Shizuku restarts an old process. */
-        const val SERVICE_VERSION = 1
+        /**
+         * Bumped when the remote contract changes, so Shizuku restarts an old process.
+         *
+         * Version 2 is Phase 10A.3: executeProbe keeps its transaction id but no longer
+         * returns the payload by value. An unchanged version would let Shizuku reuse a
+         * running version-1 process, which would answer the same transaction id with the old
+         * Bundle -- AIDL verifies transaction ids, not signatures. The protocol version in
+         * the reply is checked as well, so a mismatch that reached the client anyway is
+         * reported as what it is rather than as a missing descriptor.
+         */
+        const val SERVICE_VERSION = 2
         const val BIND_TIMEOUT_MS = 15_000L
 
         /** `pm grant` is fast; a long wait here would only mask a stuck service. */
