@@ -131,7 +131,7 @@ class ProbeStreamTransportTest {
                 it.write(outPayload)
                 it.flush()
             }
-        }, "test-child").start()
+        }, "test-child").also { it.isDaemon = true }.start()
 
         val result = streamProcess(
             FakeProcess(
@@ -223,7 +223,7 @@ class ProbeStreamTransportTest {
             sink.close()
             Channels.newOutputStream(err.sink()).close()
             Channels.newOutputStream(status.sink()).close()
-        }.start()
+        }.also { it.isDaemon = true }.start()
 
         val result = runBlocking {
             withTimeout(DEADLOCK_TIMEOUT_MS) {
@@ -295,6 +295,7 @@ class ProbeStreamTransportTest {
                 producerDone.countDown()
             }
         }
+        producer.isDaemon = true
         producer.start()
 
         runBlocking {
@@ -389,25 +390,64 @@ class ProbeStreamTransportTest {
         val err = Pipe.open()
         val status = Pipe.open()
 
-        Thread({
-            ProbeProcessStreamer(limit).stream(
-                process,
-                Channels.newOutputStream(out.sink()),
-                Channels.newOutputStream(err.sink()),
-                Channels.newOutputStream(status.sink()),
-                System.currentTimeMillis(),
-            )
-        }, "test-producer").start()
-
-        return runBlocking {
-            withTimeout(timeoutMillis) {
-                ProbeStreamReader.consume(
-                    Channels.newInputStream(out.source()),
-                    Channels.newInputStream(err.source()),
-                    Channels.newInputStream(status.source()),
-                    limit,
+        // A producer that dies without closing its sinks leaves the reader waiting for an
+        // end-of-file that never comes, and an exception on a bare Thread goes to stderr and
+        // is lost -- so a harness fault reads as a deadlock in the code under test. Both are
+        // captured here. Daemon, so a blocked producer cannot outlive a failing assertion and
+        // keep the test worker alive: a gate that hangs reports nothing at all.
+        val producerFailure = java.util.concurrent.atomic.AtomicReference<Throwable>()
+        val producer = Thread({
+            val stdoutSink = Channels.newOutputStream(out.sink())
+            val stderrSink = Channels.newOutputStream(err.sink())
+            val statusSink = Channels.newOutputStream(status.sink())
+            try {
+                ProbeProcessStreamer(limit).stream(
+                    process, stdoutSink, stderrSink, statusSink, System.currentTimeMillis(),
                 )
+            } catch (t: Throwable) {
+                producerFailure.set(t)
+                listOf(stdoutSink, stderrSink, statusSink).forEach { runCatching { it.close() } }
             }
+        }, "test-producer")
+        producer.setUncaughtExceptionHandler { _, t -> producerFailure.set(t) }
+        producer.isDaemon = true
+        producer.start()
+
+        try {
+            return runBlocking {
+                withTimeout(timeoutMillis) {
+                    ProbeStreamReader.consume(
+                        Channels.newInputStream(out.source()),
+                        Channels.newInputStream(err.source()),
+                        Channels.newInputStream(status.source()),
+                        limit,
+                    )
+                }
+            }
+        } catch (t: Throwable) {
+            producerFailure.get()?.let { throw AssertionError("the producer failed", it) }
+            throw AssertionError(
+                "consume did not finish; producer alive=" + producer.isAlive +
+                    " state=" + producer.state + threadReport(),
+                t,
+            )
+        } finally {
+            listOf(
+                out.sink(), out.source(), err.sink(), err.source(), status.sink(), status.source(),
+            ).forEach { runCatching { it.close() } }
+        }
+    }
+
+    /** Stacks of the threads this test owns, so a hang can be explained rather than guessed. */
+    private fun threadReport(): String {
+        val nl = System.lineSeparator()
+        val mine = Thread.getAllStackTraces().filterKeys {
+            it.name.startsWith("test-producer") || it.name.startsWith("battinsight-probe")
+        }
+        if (mine.isEmpty()) return nl + "  (no producer or pump threads alive)"
+        return mine.entries.joinToString(separator = "") { (thread, stack) ->
+            nl + "  --- " + thread.name + " [" + thread.state + "]" +
+                stack.take(10).joinToString(separator = "") { nl + "      " + it }
         }
     }
 

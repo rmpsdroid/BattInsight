@@ -157,9 +157,15 @@ device — the granted-app path truncated honestly while the Shizuku path failed
 16 MiB is chosen from what the application must hold, not from what a parcel will carry. The
 decoder takes a `ByteArray`, so one complete capture is materialised once in this process;
 accumulating it peaks at roughly three times its own size while the buffer doubles and is
-copied, so about 48 MiB transiently at the ceiling. That is fifteen times the largest payload
-ever measured on real hardware, so no genuine capture approaches it, and anything that does
-is a runaway producer — stopped, and reported as truncated rather than decoded as complete.
+copied, so about 48 MiB transiently at the ceiling. That is about thirteen times the largest
+payload measured on real hardware — 1,256,660 bytes — so nothing measured so far comes near it,
+and a payload that did reach it would be stopped and reported as truncated rather than decoded
+as complete.
+
+Reaching it would say nothing about the producer. The measured payloads on one healthy device
+across one boot ran 852,557 → 1,066,676 → 1,247,842 → 1,256,660, all of them fine; a ceiling
+met by that growth continuing means the ceiling needs revisiting, not that the device is at
+fault. It is a limit on what BattInsight holds at once, and claims nothing further.
 
 **This is not a constant-memory pipeline, and it should not be described as one.** The
 privileged process is constant-memory: it copies through one fixed buffer and never holds the

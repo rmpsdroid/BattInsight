@@ -36,10 +36,18 @@ class CopyReport(val byteCount: Long, val truncated: Boolean)
  * final payload. At this ceiling that is about 48 MiB of transient heap -- survivable on the
  * devices this application supports, and not something to be casual about.
  *
- * 16 MiB is about **fifteen times** the largest payload measured on real hardware
- * (1,066,676 bytes on a Samsung SM-M156B, Android 15). No genuine capture approaches it. A
- * stream that does reach it is a runaway or hostile producer, which is exactly the case a
- * hard stop is for -- and it is reported as truncated, never decoded as if complete.
+ * 16 MiB is about **thirteen times** the largest payload measured on real hardware
+ * (1,256,660 bytes on a Samsung SM-M156B, Android 15). No capture measured so far comes near
+ * it, and reaching it is reported as truncated rather than decoded as if complete.
+ *
+ * What reaching it does **not** establish is anything about the producer. An earlier version
+ * of this note called such a stream "a runaway or hostile producer"; no measurement supports
+ * that, and the withdrawn wording is recorded here rather than quietly deleted because
+ * inferring a fault from a number is the habit this file exists to break. The payloads
+ * measured on one healthy device across one boot went 852,557 -> 1,066,676 -> 1,247,842 ->
+ * 1,256,660 with nothing wrong anywhere in that sequence. If that growth ever reaches this
+ * ceiling it means the ceiling wants revisiting, not that the device is misbehaving -- so
+ * this is a limit on what BattInsight will hold at once, and it says only that.
  */
 object CaptureLimits {
 
