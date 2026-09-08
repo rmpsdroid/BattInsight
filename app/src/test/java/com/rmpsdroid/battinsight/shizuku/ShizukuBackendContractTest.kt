@@ -226,6 +226,81 @@ class ShizukuBackendContractTest {
         }
     }
 
+    /**
+     * The privileged payload is never put on disk, and streaming did not change that.
+     *
+     * Phase 10A.3 considered a design that wrote the capture to a temporary file and passed
+     * a descriptor to it. It was rejected precisely here: the raw checkin payload contains
+     * the device's full package list, and BattInsight's documented position is that the raw
+     * payload is transient -- held in memory, decoded, and released, never persisted, never
+     * logged. A design that made the privileged bytes land in a file, even briefly, would
+     * have traded a documented privacy property for implementation convenience.
+     *
+     * The pipe design keeps that property by construction, and this test keeps it from being
+     * given away later by someone who does not know it was a decision.
+     */
+    @Test
+    fun `no part of the capture path can put a payload on disk`() {
+        val onThePath = productionSources().filter {
+            val path = it.absolutePath.replace(File.separatorChar, '/')
+            "/shizuku/" in path || "/platform/AndroidRunners" in path ||
+                "/collection/CaptureLimits" in path
+        }
+        assertTrue("the capture path sources must be found", onThePath.size >= 4)
+
+        val code = onThePath.joinToString(NEWLINE) { strippedOfComments(it.readText()) }
+        listOf(
+            "FileOutputStream",
+            "createTempFile",
+            "createNewFile",
+            "cacheDir",
+            "filesDir",
+            "getExternalStorage",
+            "RandomAccessFile",
+            "Files.write",
+        ).forEach { forbidden ->
+            assertTrue(
+                "the capture path must not contain '" + forbidden + "'",
+                !code.contains(forbidden),
+            )
+        }
+    }
+
+    /**
+     * The state-changing entry point did not inherit the streaming mechanism.
+     *
+     * `executeProbe` needed an unbounded transport; `executeSetupAction` did not, and giving
+     * the one method that changes device state the more capable mechanism would have widened
+     * a security surface for no reason. Its transaction id, argument and reply shape are all
+     * unchanged.
+     */
+    @Test
+    fun `the setup action keeps its bounded by-value contract`() {
+        val aidl = generateSequence(File("").absoluteFile) { it.parentFile }
+            .map { File(it, "app/src/main/aidl/com/rmpsdroid/battinsight/shizuku/IProbeService.aidl") }
+            .firstOrNull { it.isFile }
+        assertNotNull("could not locate the AIDL contract", aidl)
+
+        val text = aidl!!.readText()
+        assertTrue(
+            "executeSetupAction must keep transaction id 2",
+            text.contains("Bundle executeSetupAction(String actionId) = 2;"),
+        )
+        assertTrue(
+            "executeProbe must keep transaction id 1",
+            text.contains("Bundle executeProbe(String probeId) = 1;"),
+        )
+        assertTrue(
+            "destroy must keep the id Shizuku fixes",
+            text.contains("void destroy() = 16777114;"),
+        )
+        assertEquals(
+            "the interface must gain no further methods",
+            3,
+            Regex("""^\s*(void|Bundle)\s+\w+\(""", RegexOption.MULTILINE).findAll(text).count(),
+        )
+    }
+
     private fun productionSources(): List<File> {
         val root = generateSequence(File("").absoluteFile) { it.parentFile }
             .map { File(it, "app/src/main/java/com/rmpsdroid/battinsight") }
@@ -282,6 +357,8 @@ class ShizukuBackendContractTest {
     }
 
     private companion object {
+        val NEWLINE = System.lineSeparator()
+
         val FORBIDDEN = listOf(
             "newProcess",
             "getDeclaredMethod",
