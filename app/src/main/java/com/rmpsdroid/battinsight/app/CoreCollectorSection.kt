@@ -146,6 +146,10 @@ private fun describeFailure(outcome: DecodeOutcome): String = when (outcome) {
             "your device — BattInsight stopped reading before the end."
     DecodeOutcome.EMPTY ->
         "Android returned nothing at all."
+    DecodeOutcome.EXECUTION_FAILED ->
+        "The capture did not complete, so there is nothing to show. Your device is fine — " +
+            "BattInsight could not finish reading from it. Try again, and if it keeps " +
+            "happening check access from Manage access."
     DecodeOutcome.UNSUPPORTED_VERSION ->
         "This device reports battery statistics in a version BattInsight has not been " +
             "checked against, so it will not guess at the numbers."
