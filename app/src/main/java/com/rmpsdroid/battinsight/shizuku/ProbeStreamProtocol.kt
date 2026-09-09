@@ -102,7 +102,7 @@ object ProbeStreamProtocol {
      * Bundle, and a client that merely noticed a missing descriptor would report something
      * unhelpful. An explicit version makes a contract mismatch say what it is.
      */
-    const val PROTOCOL_VERSION: Int = 2
+    const val PROTOCOL_VERSION: Int = 3
 
     const val KEY_PROTOCOL = "protocolVersion"
     const val KEY_STDOUT_FD = "stdoutFd"

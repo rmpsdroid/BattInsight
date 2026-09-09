@@ -25,4 +25,18 @@ interface ITransportHarness {
      * failed on hardware this call fails, and the streaming call above does not.
      */
     Bundle returnByValue(int stdoutBytes) = 2;
+
+    /**
+     * Starts a producer whose child stalls: alive, no stdout, no stderr, never exits.
+     *
+     * This is the shape that exposed R.131. A pump blocked reading such a child never
+     * reaches a write, so closing the caller's descriptors does not reach it either.
+     */
+    Bundle openStalledStream() = 3;
+
+    /** The production cancellation signal, reaching probe children and nothing else. */
+    void cancelProbe() = 4;
+
+    /** Whether the stalled child is still running. The assertion R.131 turns on. */
+    boolean isStalledChildAlive() = 5;
 }

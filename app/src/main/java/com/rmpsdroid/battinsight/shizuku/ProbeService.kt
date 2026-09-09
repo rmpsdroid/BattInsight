@@ -5,7 +5,6 @@ import android.os.ParcelFileDescriptor
 import com.rmpsdroid.battinsight.collection.CaptureLimits
 import com.rmpsdroid.battinsight.collection.ProbeCommand
 import com.rmpsdroid.battinsight.setup.SetupAction
-import java.util.Collections
 import kotlin.system.exitProcess
 
 /**
@@ -51,14 +50,15 @@ import kotlin.system.exitProcess
 class ProbeService : IProbeService.Stub() {
 
     /**
-     * Children currently running on behalf of a caller.
+     * Probe children currently running, kept apart from setup children on purpose.
      *
-     * Tracked because a child process is not a thread: it outlives the process that spawned
-     * it. Without this, tearing the service down mid-capture would leave a privileged
-     * `dumpsys` running with nothing attached to it, which is exactly the kind of residue a
-     * non-daemon service exists to avoid.
+     * See [ProbeChildRegistry]: a probe cancellation must reach probe children and nothing
+     * else, because a setup action can be running in this same process at the same time.
      */
-    private val live: MutableSet<Process> = Collections.synchronizedSet(mutableSetOf())
+    private val probes = ProbeChildRegistry()
+
+    /** Setup children. Ended only when the whole service goes away. */
+    private val setups = ProbeChildRegistry()
 
     /**
      * Shizuku tears the service down through this.
@@ -68,8 +68,20 @@ class ProbeService : IProbeService.Stub() {
      * distinction [ProbeCompletion.Missing] exists to make.
      */
     override fun destroy() {
-        synchronized(live) { live.toList() }.forEach { runCatching { it.destroyForcibly() } }
+        probes.cancelAll()
+        setups.cancelAll()
         exitProcess(0)
+    }
+
+    /**
+     * Ends any probe still running. The caller has stopped listening.
+     *
+     * Deliberately not [destroy]: this process may also be running a setup action, and
+     * killing it to clean up a read-only capture would interrupt a state-changing operation
+     * to tidy up after a harmless one.
+     */
+    override fun cancelProbe() {
+        probes.cancelAll()
     }
 
     override fun executeProbe(probeId: String?): Bundle {
@@ -120,7 +132,7 @@ class ProbeService : IProbeService.Stub() {
             // Fixed argument vector from a whitelist. No shell, no interpolation.
             val child = ProcessBuilder(argv).start()
             process = child
-            live.add(child)
+            probes.add(child)
 
             val stdoutSink = ParcelFileDescriptor.AutoCloseOutputStream(out[1])
             val stderrSink = ParcelFileDescriptor.AutoCloseOutputStream(err[1])
@@ -135,7 +147,7 @@ class ProbeService : IProbeService.Stub() {
                 try {
                     ProbeProcessStreamer().stream(child, stdoutSink, stderrSink, statusSink, started)
                 } finally {
-                    live.remove(child)
+                    probes.remove(child)
                     ourReadEnds.forEach { runCatching { it.close() } }
                 }
             }, "battinsight-probe-stream").start()
@@ -148,7 +160,7 @@ class ProbeService : IProbeService.Stub() {
             }
         } catch (t: Throwable) {
             process?.let {
-                live.remove(it)
+                probes.remove(it)
                 runCatching { it.destroyForcibly() }
             }
             listOf(out, err, status).forEach { pipe ->
@@ -175,7 +187,7 @@ class ProbeService : IProbeService.Stub() {
             // Fixed argument vector from a whitelist. No shell, no interpolation.
             val child = ProcessBuilder(argv).start()
             process = child
-            live.add(child)
+            setups.add(child)
 
             var outCapture = ByteArray(0)
             var outTruncated = false
@@ -192,7 +204,7 @@ class ProbeService : IProbeService.Stub() {
             )
             reader.join()
             val exit = child.waitFor()
-            live.remove(child)
+            setups.remove(child)
 
             Bundle().apply {
                 putBoolean(ProbeStreamProtocol.KEY_HAS_EXIT, true)
@@ -204,7 +216,7 @@ class ProbeService : IProbeService.Stub() {
             }
         } catch (t: Throwable) {
             process?.let {
-                live.remove(it)
+                setups.remove(it)
                 runCatching { it.destroyForcibly() }
             }
             rejectedValue(

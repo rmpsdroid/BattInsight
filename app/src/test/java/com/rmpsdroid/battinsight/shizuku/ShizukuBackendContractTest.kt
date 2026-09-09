@@ -294,9 +294,13 @@ class ShizukuBackendContractTest {
             "destroy must keep the id Shizuku fixes",
             text.contains("void destroy() = 16777114;"),
         )
+        assertTrue(
+            "cancelProbe must take no argument, so it cannot be aimed at anything",
+            text.contains("void cancelProbe() = 3;"),
+        )
         assertEquals(
             "the interface must gain no further methods",
-            3,
+            4,
             Regex("""^\s*(void|Bundle)\s+\w+\(""", RegexOption.MULTILINE).findAll(text).count(),
         )
     }

@@ -13,6 +13,7 @@ import com.rmpsdroid.battinsight.setup.SetupExecutor
 import com.rmpsdroid.battinsight.setup.SetupOutcome
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
@@ -105,6 +106,7 @@ class ShizukuUserServiceRunner(
                 started,
             )
 
+            var completed = false
             try {
                 withTimeout(timeoutMillis) {
                     // A probe identifier crosses the Binder, never a command.
@@ -115,22 +117,64 @@ class ShizukuUserServiceRunner(
                         return@withTimeout failure(command, reason, started)
                     }
 
-                    collectStream(bundle, command, started)
+                    val output = collectStream(bundle, command, started)
                         ?: return@withTimeout failure(
                             command, "the privileged service did not open the capture streams", started,
                         )
+                    completed = true
+                    output
                 }
             } catch (t: TimeoutCancellationException) {
+                endRemoteProbe(remote)
                 failure(command, "probe timed out", started, timedOut = true)
             } catch (t: android.os.DeadObjectException) {
-                // The remote process died. Drop the handle so the next attempt rebinds.
+                // The remote process died. Drop the handle so the next attempt rebinds, and
+                // do not try to talk to it -- there is nothing left to cancel.
                 discard()
                 failure(command, "user service died", started)
             } catch (t: Throwable) {
-                if (t is kotlinx.coroutines.CancellationException) throw t
+                if (t is kotlinx.coroutines.CancellationException) {
+                    endRemoteProbe(remote)
+                    throw t
+                }
                 failure(command, "remote execution failed: " + describe(t), started)
+            } finally {
+                // Anything that left the streaming block without finishing it leaves a child
+                // running in the privileged process. The two paths above cover cancellation
+                // and the timeout; this covers the rest, including a failure thrown between
+                // the reply arriving and the streams being drained.
+                if (!completed) endRemoteProbe(remote)
             }
         }
+
+    /**
+     * Tells the privileged service to end any probe it is still running.
+     *
+     * ## Why this is needed at all
+     *
+     * The producer kills its child when a pump loses its reader, but a pump only finds that
+     * out when it next tries to write. A child producing nothing never gets that far, so
+     * closing the descriptors -- which is all cancellation used to do -- left a privileged
+     * `dumpsys` alive until the service was torn down. Phase 10A.3 measured it; R.131 records
+     * it.
+     *
+     * ## Why it runs where it does
+     *
+     * [NonCancellable], because this is cleanup on the cancellation path: a cleanup that is
+     * itself cancellable would be skipped exactly when it is needed. Bounded by a timeout,
+     * because an unbounded Binder call in a `finally` would turn a cancelled capture into a
+     * hang. Failures are swallowed: the caller is already leaving with a typed failure, and a
+     * remote that cannot be reached has no child left to end anyway.
+     *
+     * Calling it after a capture has already finished is harmless and expected -- the child
+     * is gone and the registry is empty. Cancelling something that has just succeeded must
+     * not be an error.
+     */
+    private suspend fun endRemoteProbe(remote: IProbeService) {
+        withContext(NonCancellable) {
+            runCatching { withTimeout(CANCEL_TIMEOUT_MS) { remote.cancelProbe() } }
+        }
+    }
 
     /**
      * Drains one streamed capture into an [ExecutionOutput].
@@ -397,11 +441,19 @@ class ShizukuUserServiceRunner(
          * the reply is checked as well, so a mismatch that reached the client anyway is
          * reported as what it is rather than as a missing descriptor.
          */
-        const val SERVICE_VERSION = 2
+        const val SERVICE_VERSION = 3
         const val BIND_TIMEOUT_MS = 15_000L
 
         /** `pm grant` is fast; a long wait here would only mask a stuck service. */
         const val SETUP_TIMEOUT_MS = 20_000L
+
+        /**
+         * Cancellation cleanup is a short call, and must not become a second hang.
+         *
+         * Generous enough for a Binder round trip that only walks a registry, short enough
+         * that a wedged service cannot hold a cancelled capture open.
+         */
+        const val CANCEL_TIMEOUT_MS = 5_000L
 
         /** A disconnect that arrived before the new binding was ever used. */
         const val TEARDOWN_RACE = "disconnected before first use"

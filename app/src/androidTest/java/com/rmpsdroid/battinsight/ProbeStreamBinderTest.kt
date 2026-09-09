@@ -15,6 +15,11 @@ import com.rmpsdroid.battinsight.shizuku.ProbeCompletion
 import com.rmpsdroid.battinsight.shizuku.ProbeStreamProtocol
 import com.rmpsdroid.battinsight.shizuku.ProbeStreamReader
 import com.rmpsdroid.battinsight.shizuku.ProbeStreamResult
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.AfterClass
@@ -127,6 +132,7 @@ class ProbeStreamBinderTest {
         private const val BIND_ATTEMPTS = 3
 
         /** The Samsung SM-M156B payload the by-value transport could not carry. */
+        private const val BOUND_MS = 30_000L
         private const val MEASURED_FAILING_BYTES = 1_066_676
         private const val FOUR_MEGABYTES = 4 * 1024 * 1024
     }
@@ -237,6 +243,64 @@ class ProbeStreamBinderTest {
         assertArrayEquals(
             TransportPayload.of(32 * 1024, TransportHarnessService.STDOUT_SEED),
             bundle!!.getByteArray(ProbeStreamProtocol.KEY_STDOUT),
+        )
+    }
+
+    // ------------------------------------------------------------------ stalled cancellation
+
+    /**
+     * R.131, across a real Binder: a stalled child must die when the caller cancels.
+     *
+     * The child here starts, stays alive, produces no stdout and no stderr, and never exits
+     * on its own — the shape a wedged privileged command has. Its pumps park on the read,
+     * so they never reach the write that would tell them their reader has gone.
+     *
+     * The test shows the gap and the fix in one sequence, which is why it needs no mutation
+     * to be convincing:
+     *
+     *  1. cancel the consumer and close every descriptor — the child is **still alive**,
+     *     which is precisely the defect R.131 recorded;
+     *  2. send the production cancellation signal — the child dies.
+     *
+     * Step 1 is the old behaviour, asserted rather than described. Step 2 is what this
+     * checkpoint adds. Both run against a real remote process, real ParcelFileDescriptor
+     * pipes and the production [com.rmpsdroid.battinsight.shizuku.ProbeChildRegistry].
+     */
+    @Test
+    fun aStalledChildSurvivesDescriptorCloseAndDiesOnTheCancellationSignal() {
+        val bundle = requireNotNull(harness.openStalledStream())
+        val fdType = ParcelFileDescriptor::class.java
+        val out = requireNotNull(bundle.getParcelable(ProbeStreamProtocol.KEY_STDOUT_FD, fdType))
+        val err = requireNotNull(bundle.getParcelable(ProbeStreamProtocol.KEY_STDERR_FD, fdType))
+        val status = requireNotNull(bundle.getParcelable(ProbeStreamProtocol.KEY_STATUS_FD, fdType))
+
+        assertTrue("the child must be running to begin with", harness.isStalledChildAlive)
+
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val consumer = scope.launch {
+            ProbeStreamReader.consume(
+                ParcelFileDescriptor.AutoCloseInputStream(out),
+                ParcelFileDescriptor.AutoCloseInputStream(err),
+                ParcelFileDescriptor.AutoCloseInputStream(status),
+            )
+        }
+
+        // Cancelling closes every descriptor the caller holds. Under R.131 that is all that
+        // happened, and it is not enough.
+        runBlocking { withTimeout(BOUND_MS) { consumer.cancelAndJoin() } }
+
+        assertTrue(
+            "closing the descriptors alone does not reach a child that never writes -- " +
+                "this is the gap R.131 recorded, asserted rather than assumed",
+            harness.isStalledChildAlive,
+        )
+
+        // The signal this checkpoint adds.
+        harness.cancelProbe()
+
+        assertFalse(
+            "the cancellation signal must end the stalled child",
+            harness.isStalledChildAlive,
         )
     }
 

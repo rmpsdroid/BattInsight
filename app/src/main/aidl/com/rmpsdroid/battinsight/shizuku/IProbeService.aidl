@@ -65,4 +65,27 @@ interface IProbeService {
      *         durationMillis and, when refused, a rejection reason.
      */
     Bundle executeSetupAction(String actionId) = 2;
+
+    /**
+     * Ends any probe still running, because the caller has stopped listening.
+     *
+     * Phase 10A.3 measured the gap this closes. A probe's output travels through pipes, and
+     * the producer learns that its reader has gone when its next write fails -- so a child
+     * that is producing nothing is never noticed, and a cancelled capture left a privileged
+     * dumpsys running until the whole service was torn down.
+     *
+     * A descriptor cannot carry this signal. Every pipe end handed back inside the reply
+     * Bundle stays open in this process until the capture ends, because Bundle does not
+     * propagate PARCELABLE_WRITE_RETURN_VALUE to the ParcelFileDescriptors it contains and
+     * nothing else closes them after marshalling. A pipe with a writer that never closes
+     * cannot report end of stream, so the signal has to be a call.
+     *
+     * Affects **probes only**. Setup actions run in this same process and may be in flight
+     * at the same time, and interrupting a half-finished pm grant to clean up a read-only
+     * capture would be worse than the problem being solved.
+     *
+     * Takes no argument, so it cannot be aimed at anything. Safe to call when nothing is
+     * running, which is the ordinary outcome of racing normal completion.
+     */
+    void cancelProbe() = 3;
 }
