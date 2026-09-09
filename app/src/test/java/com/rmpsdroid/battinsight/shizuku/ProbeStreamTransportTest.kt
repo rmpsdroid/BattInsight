@@ -1,0 +1,638 @@
+package com.rmpsdroid.battinsight.shizuku
+
+import com.rmpsdroid.battinsight.collection.CaptureLimits
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import java.io.ByteArrayInputStream
+import java.io.InputStream
+import java.io.OutputStream
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+
+/**
+ * The transport regression for the Phase 10A P1.
+ *
+ * ## What was not covered before, and why the old suite could not have caught it
+ *
+ * The failing capture was 1,066,676 bytes. The largest byte array anywhere in the suite was
+ * `ByteArray(900_000)`, in a JVM test that never touched a transport at all, and the only
+ * test that crossed a real Binder ran the `id` probe, whose output is one short line. So
+ * nothing in the project had ever moved more than a megabyte through the privileged path,
+ * and the 1 MiB ceiling sat 15% above the largest payload ever exercised. The defect was not
+ * missed through oversight in a test; there was no test in that size range to miss it.
+ *
+ * These tests run over [BlockingTestPipe], a purpose-built blocking pipe whose own contract
+ * is asserted by `BlockingTestPipeTest`. Real flow control is present, so a serial producer
+ * genuinely deadlocks here; what is deliberately absent is any dependence on a platform pipe
+ * implementation, which is what made an earlier version of this class hang one run in six.
+ * The Binder boundary itself is proven separately and on a device by `ProbeStreamBinderTest`,
+ * because no JVM test can prove a parcel size limit.
+ */
+@OptIn(ExperimentalCoroutinesApi::class)
+class ProbeStreamTransportTest {
+
+    // ------------------------------------------------------------------ size progression
+
+    @Test
+    fun `a small capture arrives exactly`() {
+        val payload = pattern(64 * 1024)
+        val result = streamed(stdout = payload)
+
+        assertArrayEquals("stdout must be byte for byte", payload, result.stdout)
+        assertFalse("nothing was cut short", result.truncated)
+        assertEquals(0, completed(result).exitCode)
+    }
+
+    /**
+     * The size that actually failed, plus the margin that made it fail.
+     *
+     * 1,066,676 bytes is the measured `dumpsys batterystats -c` output of the Samsung
+     * SM-M156B that exposed the defect. Under the old by-value transport this exact payload
+     * produced a 1,048,800-byte reply parcel and a refused transaction.
+     */
+    @Test
+    fun `the payload size that failed on hardware now arrives exactly`() {
+        val payload = pattern(MEASURED_FAILING_BYTES)
+        val result = streamed(stdout = payload)
+
+        assertEquals(MEASURED_FAILING_BYTES, result.stdout.size)
+        assertArrayEquals(payload, result.stdout)
+        assertFalse(result.truncated)
+        assertEquals(0, completed(result).exitCode)
+    }
+
+    @Test
+    fun `several megabytes arrive exactly`() {
+        val payload = pattern(4 * 1024 * 1024)
+        val result = streamed(stdout = payload)
+
+        assertEquals(4 * 1024 * 1024, result.stdout.size)
+        assertArrayEquals("four megabytes, byte for byte", payload, result.stdout)
+        assertFalse(result.truncated)
+    }
+
+    // ------------------------------------------------------------------ the deadlock
+
+    /**
+     * Both streams are large, and both must arrive intact.
+     *
+     * This one is about volume rather than ordering: a megabyte of standard error must not
+     * cost any of the four megabytes of capture, in either direction. The test below it is
+     * the one that pins concurrent draining, and it needs a child that can block to do so.
+     */
+    @Test
+    fun `a large stderr is preserved alongside a large stdout without deadlocking`() {
+        val out = pattern(4 * 1024 * 1024)
+        val err = pattern(1024 * 1024, seed = 11)
+
+        val result = streamed(stdout = out, stderr = err, timeoutMillis = DEADLOCK_TIMEOUT_MS)
+
+        assertArrayEquals("stdout intact", out, result.stdout)
+        assertArrayEquals("stderr intact", err, result.stderr)
+        assertFalse(result.truncated)
+    }
+
+    /**
+     * The deadlock as it actually occurs: a child that fills standard error first.
+     *
+     * The test above cannot produce it, and that is worth being precise about. Its child is
+     * an in-memory stream that never blocks, so a producer draining stdout before stderr
+     * still finishes. The hazard needs a child whose own pipes push back -- which is every
+     * real one, because a process writing to a full pipe is suspended by the kernel until
+     * somebody reads.
+     *
+     * So this child is given real pipes and writes a megabyte to standard error *before*
+     * writing anything to standard output. A producer that drains stdout to its end first --
+     * the single-threaded shape both backends had before Phase 10A.3 -- waits for output the
+     * child cannot produce until its stderr is drained, and the child waits for a reader that
+     * will not arrive until stdout ends. Neither side is at fault alone.
+     */
+    @Test
+    fun `a child that fills standard error first does not deadlock the producer`() {
+        val childOut = BlockingTestPipe()
+        val childErr = BlockingTestPipe()
+        val errPayload = pattern(1024 * 1024, seed = 3)
+        val outPayload = pattern(1024 * 1024, seed = 4)
+
+        Thread({
+            childErr.sink.use {
+                it.write(errPayload)
+                it.flush()
+            }
+            childOut.sink.use {
+                it.write(outPayload)
+                it.flush()
+            }
+        }, "test-child").also { it.isDaemon = true }.start()
+
+        val result = streamProcess(
+            FakeProcess(stdout = childOut.source, stderr = childErr.source, exit = 0),
+            timeoutMillis = DEADLOCK_TIMEOUT_MS,
+        )
+
+        assertArrayEquals("stdout intact", outPayload, result.stdout)
+        assertArrayEquals("stderr intact", errPayload, result.stderr)
+        assertEquals(0, completed(result).exitCode)
+    }
+
+    // ------------------------------------------------------------------ completion metadata
+
+    @Test
+    fun `a non-zero exit status survives the stream`() {
+        val result = streamed(stdout = pattern(4096), exit = 13)
+
+        val completion = completed(result)
+        assertTrue(completion.hasExitCode)
+        assertEquals(13, completion.exitCode)
+        assertEquals("", completion.failure)
+    }
+
+    @Test
+    fun `the completion frame reports the byte counts it moved`() {
+        val result = streamed(stdout = pattern(300_000), stderr = pattern(1_000, seed = 5))
+
+        val completion = completed(result)
+        assertEquals(300_000L, completion.stdoutByteCount)
+        assertEquals(1_000L, completion.stderrByteCount)
+    }
+
+    // ------------------------------------------------------------------ the safety ceiling
+
+    /**
+     * The ceiling is a memory bound, and hitting it is reported, never silently absorbed.
+     *
+     * A small limit is injected rather than producing 16 MiB, because what is under test is
+     * the behaviour at the ceiling, not the value of the constant. The constant is asserted
+     * separately, and the two together are the policy.
+     */
+    @Test
+    fun `reaching the safety ceiling is reported as truncation, not as a short success`() {
+        val payload = pattern(200_000)
+        val result = streamed(stdout = payload, limit = 50_000)
+
+        assertEquals("only the prefix was kept", 50_000, result.stdout.size)
+        assertArrayEquals(payload.copyOf(50_000), result.stdout)
+        assertTrue("and it must say so", result.truncated)
+        assertTrue("the producer knew it cut the stream", completed(result).stdoutTruncated)
+    }
+
+    @Test
+    fun `the production ceiling admits payloads far above the size that failed`() {
+        assertTrue(
+            "the ceiling must clear the measured failing payload by a wide margin",
+            CaptureLimits.MAX_CAPTURE_BYTES > MEASURED_FAILING_BYTES * 8,
+        )
+        assertTrue(
+            "and must stay bounded: the decoder materialises this once in the app process",
+            CaptureLimits.MAX_CAPTURE_BYTES <= 32 * 1024 * 1024,
+        )
+    }
+
+    // ------------------------------------------------------------------ abnormal endings
+
+    /**
+     * A remote that dies mid-capture must not look like a capture that was merely short.
+     *
+     * The pipes close with the process and no completion frame is ever written, so the
+     * distinction rests entirely on the frame's absence -- which is why completion is framed
+     * explicitly instead of being inferred from end-of-file.
+     */
+    @Test
+    fun `a remote that dies mid-stream is a typed failure, not a short capture`() {
+        val out = BlockingTestPipe()
+        val err = BlockingTestPipe()
+        val status = BlockingTestPipe()
+
+        Thread {
+            out.sink.write(pattern(8192))
+            out.sink.flush()
+            // Death: every descriptor closes, and no frame is written.
+            out.sink.close()
+            err.sink.close()
+            status.sink.close()
+        }.also { it.isDaemon = true }.start()
+
+        val result = runBlocking {
+            withTimeout(DEADLOCK_TIMEOUT_MS) {
+                ProbeStreamReader.consume(out.source, err.source, status.source)
+            }
+        }
+
+        val completion = result.completion
+        assertTrue(
+            "an unreported ending must be Missing, got " + completion,
+            completion is ProbeCompletion.Missing,
+        )
+    }
+
+    @Test
+    fun `a stream that ends early takes the exit status down with it`() {
+        // The child produced output, then the reader vanished: the producer reports the
+        // failure, and a process that could not be streamed properly has no usable status.
+        val process = FakeProcess(
+            stdout = ByteArrayInputStream(pattern(4096)),
+            stderr = failingStream(),
+            exit = 0,
+        )
+        val result = streamProcess(process)
+
+        val completion = completed(result)
+        assertTrue("the producer must name the broken stream", completion.failure.isNotEmpty())
+        assertTrue("and must have killed the child", process.destroyed)
+    }
+
+    // ------------------------------------------------------------------ cancellation
+
+    /**
+     * Cancelling must reach all the way to the privileged child.
+     *
+     * A blocking pipe read does not observe coroutine cancellation, so without the guard in
+     * [ProbeStreamReader] this would sit until the remote happened to finish -- and the
+     * child would keep running behind it. The assertions are the three things that must
+     * follow: the reader returns, the producer stops, and the child is destroyed.
+     */
+    @Test
+    fun `cancelling closes the descriptors, stops the producer and kills the child`() {
+        val forever = endlessStream()
+        val process = FakeProcess(
+            stdout = forever,
+            stderr = ByteArrayInputStream(ByteArray(0)),
+            exit = 0,
+            waitUntil = CountDownLatch(1),
+        )
+
+        val out = BlockingTestPipe()
+        val err = BlockingTestPipe()
+        val status = BlockingTestPipe()
+        val producerDone = CountDownLatch(1)
+        val producer = Thread {
+            try {
+                ProbeProcessStreamer().stream(
+                    process, out.sink, err.sink, status.sink, System.currentTimeMillis(),
+                )
+            } finally {
+                producerDone.countDown()
+            }
+        }
+        producer.isDaemon = true
+        producer.start()
+
+        // The consumer runs in its own scope, not as a child of runBlocking. If cancellation
+        // ever stops working its reads stay blocked for ever -- and as a child that would keep
+        // runBlocking from returning even after the timeout fired, turning a bounded failure
+        // into a hung worker that reports nothing at all.
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val consumer = scope.launch {
+            ProbeStreamReader.consume(out.source, err.source, status.source)
+        }
+        // Let the pipes actually start moving before pulling the plug.
+        while (forever.produced < 256 * 1024) Thread.yield()
+        runBlocking { consumer.cancelAndJoinWithin(DEADLOCK_TIMEOUT_MS) }
+
+        assertTrue(
+            "the producer must exit once its reader is gone",
+            producerDone.await(DEADLOCK_TIMEOUT_MS, TimeUnit.MILLISECONDS),
+        )
+        assertTrue("the child must not be left running", process.destroyed)
+    }
+
+    /**
+     * Cancelling must also reach a consumer that is blocked with nothing to read.
+     *
+     * The test above cancels a consumer that is being fed continuously, so its reads never
+     * actually starve -- and a mutation that stopped a closed descriptor from waking a blocked
+     * reader still passed it. That is the case cancellation is *for*: a capture that has
+     * stalled, where the reader is parked waiting for bytes that are not coming.
+     *
+     * Here the child produces nothing and never ends, so the producer parks reading it and the
+     * consumer parks reading an empty pipe. The only thing that can free the consumer is the
+     * guard closing the descriptors.
+     *
+     * ## What this deliberately does not assert
+     *
+     * It does not assert that the child is destroyed, and that absence is a finding rather
+     * than an oversight. A pump blocked *reading* a stalled child never touches its sink, so
+     * closing the caller's descriptors does not reach it: the pump learns its reader has gone
+     * only when it next tries to write. With a child that is producing output -- every real
+     * capture -- that happens almost immediately, which is the case
+     * `cancelling closes the descriptors, stops the producer and kills the child` covers. With
+     * a child producing nothing it does not happen at all, and the child then lives until the
+     * service is torn down and `destroy()` reaps it.
+     *
+     * That gap is reported in R.131 and is not patched here: this checkpoint is test-only, and
+     * a production change belongs behind its own review.
+     */
+    @Test
+    fun `cancelling wakes a consumer blocked with nothing to read`() {
+        val idleChild = BlockingTestPipe()
+        val process = FakeProcess(
+            stdout = idleChild.source,
+            stderr = ByteArrayInputStream(ByteArray(0)),
+            exit = 0,
+            waitUntil = CountDownLatch(1),
+        )
+
+        val out = BlockingTestPipe()
+        val err = BlockingTestPipe()
+        val status = BlockingTestPipe()
+        val producerDone = CountDownLatch(1)
+        val producer = Thread({
+            try {
+                ProbeProcessStreamer().stream(
+                    process, out.sink, err.sink, status.sink, System.currentTimeMillis(),
+                )
+            } finally {
+                producerDone.countDown()
+            }
+        }, "test-producer")
+        producer.isDaemon = true
+        producer.start()
+
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val consumer = scope.launch {
+            ProbeStreamReader.consume(out.source, err.source, status.source)
+        }
+        // Both halves must genuinely be parked before cancelling, or the test proves nothing:
+        // a consumer that had not started reading yet would be cancelled trivially, and a
+        // broken wake-up would go unnoticed. The scope is external for the same reason as
+        // above -- a failure here must be bounded rather than hang the worker.
+        awaitPumpParked()
+        awaitBlockedReader(out)
+        // Fails by timing out if a closed descriptor no longer wakes a blocked read.
+        runBlocking { consumer.cancelAndJoinWithin(DEADLOCK_TIMEOUT_MS) }
+
+        assertEquals(
+            "the producer is still parked on the stalled child, which is the point of R.131",
+            1L,
+            producerDone.count,
+        )
+        idleChild.close()
+    }
+
+    // ------------------------------------------------------------------ the frame itself
+
+    @Test
+    fun `a completion frame round-trips`() {
+        val original = ProbeCompletion.Complete(
+            hasExitCode = true,
+            exitCode = 7,
+            stdoutTruncated = true,
+            stderrTruncated = false,
+            durationMillis = 4321,
+            stdoutByteCount = 999_999,
+            stderrByteCount = 12,
+            failure = "something to carry",
+        )
+        val buffer = java.io.ByteArrayOutputStream()
+        ProbeStreamProtocol.writeCompletion(buffer, original)
+
+        val read = ProbeStreamProtocol.readCompletion(ByteArrayInputStream(buffer.toByteArray()))
+        assertEquals(original, read)
+    }
+
+    @Test
+    fun `a half-written frame is missing, not a completion`() {
+        val buffer = java.io.ByteArrayOutputStream()
+        ProbeStreamProtocol.writeCompletion(
+            buffer,
+            ProbeCompletion.Complete(true, 0, false, false, 1, 2, 3, ""),
+        )
+        val half = buffer.toByteArray().copyOf(buffer.size() / 2)
+
+        val read = ProbeStreamProtocol.readCompletion(ByteArrayInputStream(half))
+        assertTrue("a partial frame is not a result", read is ProbeCompletion.Missing)
+    }
+
+    @Test
+    fun `bytes from some other contract are missing, not a completion`() {
+        val read = ProbeStreamProtocol.readCompletion(
+            ByteArrayInputStream("not a completion frame at all".toByteArray()),
+        )
+        assertTrue(read is ProbeCompletion.Missing)
+    }
+
+    @Test
+    fun `an empty status stream is missing, not a completion`() {
+        val read = ProbeStreamProtocol.readCompletion(ByteArrayInputStream(ByteArray(0)))
+        assertTrue(read is ProbeCompletion.Missing)
+    }
+
+    // ------------------------------------------------------------------ helpers
+
+    /** Runs the real producer and the real consumer against real pipes. */
+    private fun streamed(
+        stdout: ByteArray,
+        stderr: ByteArray = ByteArray(0),
+        exit: Int = 0,
+        limit: Int = CaptureLimits.MAX_CAPTURE_BYTES,
+        timeoutMillis: Long = DEADLOCK_TIMEOUT_MS,
+    ): ProbeStreamResult = streamProcess(
+        FakeProcess(ByteArrayInputStream(stdout), ByteArrayInputStream(stderr), exit),
+        limit,
+        timeoutMillis,
+    )
+
+    private fun streamProcess(
+        process: Process,
+        limit: Int = CaptureLimits.MAX_CAPTURE_BYTES,
+        timeoutMillis: Long = DEADLOCK_TIMEOUT_MS,
+    ): ProbeStreamResult {
+        val out = BlockingTestPipe()
+        val err = BlockingTestPipe()
+        val status = BlockingTestPipe()
+
+        // A producer that dies without closing its sinks leaves the reader waiting for an
+        // end-of-file that never comes, and an exception on a bare Thread goes to stderr and
+        // is lost -- so a harness fault reads as a deadlock in the code under test. Both are
+        // captured here. Daemon, so a blocked producer cannot outlive a failing assertion and
+        // keep the test worker alive: a gate that hangs reports nothing at all.
+        val producerFailure = java.util.concurrent.atomic.AtomicReference<Throwable>()
+        val producer = Thread({
+            val stdoutSink = out.sink
+            val stderrSink = err.sink
+            val statusSink = status.sink
+            try {
+                ProbeProcessStreamer(limit).stream(
+                    process, stdoutSink, stderrSink, statusSink, System.currentTimeMillis(),
+                )
+            } catch (t: Throwable) {
+                producerFailure.set(t)
+                listOf(stdoutSink, stderrSink, statusSink).forEach { runCatching { it.close() } }
+            }
+        }, "test-producer")
+        producer.setUncaughtExceptionHandler { _, t -> producerFailure.set(t) }
+        producer.isDaemon = true
+        producer.start()
+
+        try {
+            return runBlocking {
+                withTimeout(timeoutMillis) {
+                    ProbeStreamReader.consume(out.source, err.source, status.source, limit)
+                }
+            }
+        } catch (t: Throwable) {
+            producerFailure.get()?.let { throw AssertionError("the producer failed", it) }
+            throw AssertionError(
+                "consume did not finish; producer alive=" + producer.isAlive +
+                    " state=" + producer.state + threadReport(),
+                t,
+            )
+        } finally {
+            listOf(out, err, status).forEach { runCatching { it.close() } }
+        }
+    }
+
+    /** Stacks of the threads this test owns, so a hang can be explained rather than guessed. */
+    private fun threadReport(): String {
+        val nl = System.lineSeparator()
+        val mine = Thread.getAllStackTraces().filterKeys {
+            it.name.startsWith("test-producer") || it.name.startsWith("battinsight-probe")
+        }
+        if (mine.isEmpty()) return nl + "  (no producer or pump threads alive)"
+        return mine.entries.joinToString(separator = "") { (thread, stack) ->
+            nl + "  --- " + thread.name + " [" + thread.state + "]" +
+                stack.take(10).joinToString(separator = "") { nl + "      " + it }
+        }
+    }
+
+    private fun completed(result: ProbeStreamResult): ProbeCompletion.Complete {
+        val completion = result.completion
+        assertTrue("expected a completion frame, got " + completion, completion is ProbeCompletion.Complete)
+        return completion as ProbeCompletion.Complete
+    }
+
+    /**
+     * Waits until the stdout pump is genuinely parked, rather than assuming it by now is.
+     *
+     * Observed, not timed: a sleep long enough to "probably" be parked is the reasoning that
+     * made the previous version of this class unreliable.
+     */
+    private fun awaitBlockedReader(pipe: BlockingTestPipe) {
+        val deadline = System.nanoTime() + PARKED_TIMEOUT_NANOS
+        while (System.nanoTime() < deadline) {
+            if (pipe.blockedReaders > 0) return
+            Thread.yield()
+        }
+        throw AssertionError("no reader ever parked on the payload pipe")
+    }
+
+    private fun awaitPumpParked() {
+        val deadline = System.nanoTime() + PARKED_TIMEOUT_NANOS
+        while (System.nanoTime() < deadline) {
+            val parked = Thread.getAllStackTraces().keys.any {
+                it.name == "battinsight-probe-output" && it.state == Thread.State.WAITING
+            }
+            if (parked) return
+            Thread.yield()
+        }
+        throw AssertionError("the stdout pump never parked")
+    }
+
+    private suspend fun kotlinx.coroutines.Job.cancelAndJoinWithin(millis: Long) {
+        cancel()
+        withTimeout(millis) { join() }
+    }
+
+    /** Deterministic, non-repeating enough that a misaligned copy would not compare equal. */
+    private fun pattern(size: Int, seed: Int = 1): ByteArray {
+        val bytes = ByteArray(size)
+        var value = seed
+        for (i in 0 until size) {
+            value = value * 1_103_515_245 + 12_345
+            bytes[i] = (value ushr 16).toByte()
+        }
+        return bytes
+    }
+
+    /** Never ends, and counts what it gave out so a test can wait for real movement. */
+    private fun endlessStream() = object : InputStream() {
+        @Volatile
+        var produced: Long = 0
+
+        override fun read(): Int {
+            produced++
+            return 0x41
+        }
+
+        override fun read(b: ByteArray, off: Int, len: Int): Int {
+            java.util.Arrays.fill(b, off, off + len, 0x41.toByte())
+            produced += len
+            return len
+        }
+    }
+
+    /** Fails part way through, standing in for a descriptor that went away. */
+    private fun failingStream() = object : InputStream() {
+        private var served = 0
+
+        override fun read(): Int = throw java.io.IOException("gone")
+
+        override fun read(b: ByteArray, off: Int, len: Int): Int {
+            if (served > 0) throw java.io.IOException("gone")
+            served++
+            return minOf(len, 128).also { java.util.Arrays.fill(b, off, off + it, 0x42.toByte()) }
+        }
+    }
+
+    /**
+     * A [Process] whose streams and exit status the test controls.
+     *
+     * Real enough for the streamer, which only ever asks for the three streams, the exit
+     * status and forcible destruction.
+     */
+    private class FakeProcess(
+        private val stdout: InputStream,
+        private val stderr: InputStream,
+        private val exit: Int,
+        private val waitUntil: CountDownLatch = CountDownLatch(0),
+    ) : Process() {
+
+        @Volatile
+        var destroyed = false
+
+        override fun getOutputStream(): OutputStream = OutputStream.nullOutputStream()
+        override fun getInputStream(): InputStream = stdout
+        override fun getErrorStream(): InputStream = stderr
+        override fun exitValue(): Int = exit
+
+        override fun waitFor(): Int {
+            waitUntil.await()
+            return exit
+        }
+
+        override fun destroy() {
+            destroyed = true
+            waitUntil.countDown()
+        }
+
+        override fun destroyForcibly(): Process {
+            destroy()
+            return this
+        }
+    }
+
+    private companion object {
+        /**
+         * Generous on purpose. Every timeout in this class is a deadlock detector, not a
+         * performance assertion: the failures it guards against never finish at all, so the
+         * only thing a tight bound buys is flakiness when the machine is busy building.
+         */
+        const val DEADLOCK_TIMEOUT_MS = 120_000L
+
+        /** Bounds a failure only; never waited out on the passing path. */
+        const val PARKED_TIMEOUT_NANOS = 30_000_000_000L
+
+        /** The Samsung SM-M156B payload that the by-value transport could not carry. */
+        const val MEASURED_FAILING_BYTES = 1_066_676
+    }
+}

@@ -28,8 +28,26 @@ enum class DecodeOutcome {
     /** Cut short. Late sections may be missing and must not be reported as absent. */
     TRUNCATED,
 
-    /** Nothing to decode. */
+    /**
+     * Nothing to decode.
+     *
+     * Means the command **ran and produced no bytes**, and nothing else. It must never be
+     * reached because an execution failed before producing any: Phase 10A measured exactly
+     * that, where a refused Binder transaction left the payload empty and the user was told
+     * "Android returned nothing at all" about a platform that had in fact produced
+     * 1,066,676 bytes. Use [EXECUTION_FAILED] for an attempt that never delivered output.
+     */
     EMPTY,
+
+    /**
+     * The capture could not be run to completion, so there is nothing to decode.
+     *
+     * Distinct from [EMPTY] because the difference is the difference between a fact about
+     * the user's device and a fact about our own code, which is the distinction this whole
+     * enum exists to preserve. A transport failure, a process that never completed, and a
+     * non-zero exit all land here.
+     */
+    EXECUTION_FAILED,
 
     /**
      * The payload is a permission denial, not statistics.

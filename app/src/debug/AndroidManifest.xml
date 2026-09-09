@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug-only manifest additions. Merged into the debug variant and into nothing else: the
+  release APK has no services at all, which the release manifest can be checked for.
+
+  The transport harness needs a genuinely separate process, because the defect Phase 10A.3
+  fixed is a property of Binder and cannot be reproduced in-process.
+
+  It lives here rather than in the androidTest source set for a mundane but decisive reason.
+  A service declared in the test APK starts a plain process whose dex path is the test APK
+  alone; the Kotlin standard library and the production classes both live in the application
+  APK, so that process cannot load either. Instrumentation only escapes this because it runs
+  inside the application under test. Putting the harness in the debug variant gives it the
+  real application classpath, which is also what lets it use the production streamer rather
+  than a reimplementation.
+
+  It is not exported. Instrumentation runs under this application's own identity, so the bind
+  is same-package and needs no exposure to anyone else.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <service
+            android:name="com.rmpsdroid.battinsight.harness.TransportHarnessService"
+            android:exported="false"
+            android:process=":transportharness" />
+    </application>
+
+</manifest>

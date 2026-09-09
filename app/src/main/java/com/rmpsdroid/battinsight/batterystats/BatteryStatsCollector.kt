@@ -98,12 +98,30 @@ class BatteryStatsCollector(
             output, backendKind, SourceFormat.CHECKIN, output.durationMillis,
         ).outcome()
 
-        if (classified is CollectionOutcome.PermissionDenied) {
-            return DecodeResult.Failure(
+        // Every typed non-success the classifier can produce is acted on here. Until Phase
+        // 10A.3 only the denial was, and everything else fell through to the decoder --
+        // which, handed the zero bytes a failed execution leaves behind, correctly reported
+        // EMPTY, and the screen turned that into "Android returned nothing at all". The
+        // classification was right and was then discarded; computing an outcome and not
+        // branching on it is how a transport fault came to be reported as a fact about the
+        // platform.
+        when (classified) {
+            is CollectionOutcome.PermissionDenied -> return DecodeResult.Failure(
                 DecodeOutcome.PERMISSION_DENIAL_PAYLOAD,
                 "the backend returned a permission denial: ${classified.permission}",
                 metadata,
             )
+
+            is CollectionOutcome.ExecutionFailed -> return DecodeResult.Failure(
+                DecodeOutcome.EXECUTION_FAILED,
+                "the capture did not complete" +
+                    (classified.exitCode?.let { " (exit status $it)" } ?: ""),
+                metadata,
+            )
+
+            // Everything else still reaches the decoder, which is the only thing that can
+            // tell a denial payload, a malformed payload and a genuinely empty one apart.
+            else -> Unit
         }
 
         return decoder.decode(output.stdout, metadata)

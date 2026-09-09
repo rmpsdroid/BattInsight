@@ -198,6 +198,20 @@ they describe no other application.
 Still **not** written to disk, deliberately: privileged payloads, package lists, permission
 text and capability reports. Probe output is inspected in memory and discarded.
 
+### Why streaming did not put the payload on disk
+
+Phase 10A.3 had to stop carrying the capture through a Binder reply, and the obvious
+alternative was the wrong one. Writing the privileged output to a temporary file and passing
+a descriptor to it would have been simpler to reason about — a file has no flow control and
+no ordering to get right — and it would have put the raw checkin payload, which contains the
+device's complete package list, on disk.
+
+That trades a documented property of this application for implementation convenience, so it
+was rejected. Anonymous pipes hold the same property by construction: the bytes exist in
+kernel buffers and this process's heap, are decoded, and are released. Nothing lands in a
+file, a cache directory or a log at any point, and `ShizukuBackendContractTest` now asserts
+that no source file on the capture path can open one.
+
 Two identifiers are stored per reading. One is a UUID this application generates, meaningless
 elsewhere. The other is the kernel boot identifier, which changes on every restart and is
 what distinguishes a reboot from a clock change; it never leaves the device, and cloud backup

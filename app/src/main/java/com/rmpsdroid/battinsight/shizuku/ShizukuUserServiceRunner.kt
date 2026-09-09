@@ -4,6 +4,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.ServiceConnection
 import android.os.IBinder
+import android.os.ParcelFileDescriptor
 import com.rmpsdroid.battinsight.collection.ExecutionOutput
 import com.rmpsdroid.battinsight.collection.ProbeCommand
 import com.rmpsdroid.battinsight.collection.ProcessRunner
@@ -12,6 +13,7 @@ import com.rmpsdroid.battinsight.setup.SetupExecutor
 import com.rmpsdroid.battinsight.setup.SetupOutcome
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
@@ -104,40 +106,142 @@ class ShizukuUserServiceRunner(
                 started,
             )
 
+            var completed = false
             try {
                 withTimeout(timeoutMillis) {
                     // A probe identifier crosses the Binder, never a command.
                     val bundle = remote.executeProbe(command.id)
                         ?: return@withTimeout failure(command, "no result from user service", started)
 
-                    bundle.getString(ProbeService.KEY_REJECTION)?.let { reason ->
+                    bundle.getString(ProbeStreamProtocol.KEY_REJECTION)?.let { reason ->
                         return@withTimeout failure(command, reason, started)
                     }
 
-                    val hasExit = bundle.getBoolean(ProbeService.KEY_HAS_EXIT, false)
-                    ExecutionOutput(
-                        command = command,
-                        exitCode = if (hasExit) bundle.getInt(ProbeService.KEY_EXIT) else null,
-                        stdout = bundle.getByteArray(ProbeService.KEY_STDOUT) ?: ByteArray(0),
-                        stderr = bundle.getByteArray(ProbeService.KEY_STDERR) ?: ByteArray(0),
-                        durationMillis = bundle.getLong(
-                            ProbeService.KEY_DURATION,
-                            System.currentTimeMillis() - started,
-                        ),
-                        truncated = bundle.getBoolean(ProbeService.KEY_TRUNCATED, false),
-                    )
+                    val output = collectStream(bundle, command, started)
+                        ?: return@withTimeout failure(
+                            command, "the privileged service did not open the capture streams", started,
+                        )
+                    completed = true
+                    output
                 }
             } catch (t: TimeoutCancellationException) {
+                endRemoteProbe(remote)
                 failure(command, "probe timed out", started, timedOut = true)
             } catch (t: android.os.DeadObjectException) {
-                // The remote process died. Drop the handle so the next attempt rebinds.
+                // The remote process died. Drop the handle so the next attempt rebinds, and
+                // do not try to talk to it -- there is nothing left to cancel.
                 discard()
                 failure(command, "user service died", started)
             } catch (t: Throwable) {
-                if (t is kotlinx.coroutines.CancellationException) throw t
+                if (t is kotlinx.coroutines.CancellationException) {
+                    endRemoteProbe(remote)
+                    throw t
+                }
                 failure(command, "remote execution failed: " + describe(t), started)
+            } finally {
+                // Anything that left the streaming block without finishing it leaves a child
+                // running in the privileged process. The two paths above cover cancellation
+                // and the timeout; this covers the rest, including a failure thrown between
+                // the reply arriving and the streams being drained.
+                if (!completed) endRemoteProbe(remote)
             }
         }
+
+    /**
+     * Tells the privileged service to end any probe it is still running.
+     *
+     * ## Why this is needed at all
+     *
+     * The producer kills its child when a pump loses its reader, but a pump only finds that
+     * out when it next tries to write. A child producing nothing never gets that far, so
+     * closing the descriptors -- which is all cancellation used to do -- left a privileged
+     * `dumpsys` alive until the service was torn down. Phase 10A.3 measured it; R.131 records
+     * it.
+     *
+     * ## Why it runs where it does
+     *
+     * [NonCancellable], because this is cleanup on the cancellation path: a cleanup that is
+     * itself cancellable would be skipped exactly when it is needed. Bounded by a timeout,
+     * because an unbounded Binder call in a `finally` would turn a cancelled capture into a
+     * hang. Failures are swallowed: the caller is already leaving with a typed failure, and a
+     * remote that cannot be reached has no child left to end anyway.
+     *
+     * Calling it after a capture has already finished is harmless and expected -- the child
+     * is gone and the registry is empty. Cancelling something that has just succeeded must
+     * not be an error.
+     */
+    private suspend fun endRemoteProbe(remote: IProbeService) {
+        withContext(NonCancellable) {
+            runCatching { withTimeout(CANCEL_TIMEOUT_MS) { remote.cancelProbe() } }
+        }
+    }
+
+    /**
+     * Drains one streamed capture into an [ExecutionOutput].
+     *
+     * ## Why a partial capture is not returned as a short success
+     *
+     * When the completion frame never arrives -- the privileged process died, or was torn
+     * down mid-capture -- whatever bytes did arrive are of unknown completeness. They are
+     * dropped and the attempt is reported as a failure rather than being handed to the
+     * decoder. A prefix of checkin output parses perfectly well as far as it goes, and its
+     * missing late sections would be read as sections the device does not have; the kernel
+     * wakelock block sits at 84-88% of the payload, so that is the likely thing to lose.
+     *
+     * A remote that reported a problem gets its exit code discarded for the same reason. A
+     * process that could not be run properly has no meaningful exit status, and reporting
+     * one would let the classifier treat a broken execution as a clean one.
+     *
+     * @return null when the reply carried no descriptors at all.
+     */
+    private suspend fun collectStream(
+        bundle: android.os.Bundle,
+        command: ProbeCommand,
+        started: Long,
+    ): ExecutionOutput? {
+        val protocol = bundle.getInt(ProbeStreamProtocol.KEY_PROTOCOL, 0)
+        if (protocol != ProbeStreamProtocol.PROTOCOL_VERSION) {
+            // Shizuku restarts a service whose version differs, so reaching here means that
+            // did not happen. AIDL does not verify signatures, so saying what the mismatch
+            // is beats reporting the missing descriptor it would otherwise look like.
+            return failure(
+                command,
+                "the privileged service speaks stream protocol " + protocol +
+                    ", this build speaks " + ProbeStreamProtocol.PROTOCOL_VERSION,
+                started,
+            )
+        }
+
+        val fdType = ParcelFileDescriptor::class.java
+        val stdoutFd = bundle.getParcelable(ProbeStreamProtocol.KEY_STDOUT_FD, fdType)
+        val stderrFd = bundle.getParcelable(ProbeStreamProtocol.KEY_STDERR_FD, fdType)
+        val statusFd = bundle.getParcelable(ProbeStreamProtocol.KEY_STATUS_FD, fdType)
+        if (stdoutFd == null || stderrFd == null || statusFd == null) {
+            listOfNotNull(stdoutFd, stderrFd, statusFd).forEach { runCatching { it.close() } }
+            return null
+        }
+
+        val result = ProbeStreamReader.consume(
+            ParcelFileDescriptor.AutoCloseInputStream(stdoutFd),
+            ParcelFileDescriptor.AutoCloseInputStream(stderrFd),
+            ParcelFileDescriptor.AutoCloseInputStream(statusFd),
+        )
+
+        return when (val completion = result.completion) {
+            is ProbeCompletion.Missing -> failure(command, completion.reason, started)
+            is ProbeCompletion.Complete -> {
+                val broke = completion.failure.isNotEmpty()
+                ExecutionOutput(
+                    command = command,
+                    exitCode = if (completion.hasExitCode && !broke) completion.exitCode else null,
+                    stdout = if (broke) ByteArray(0) else result.stdout,
+                    stderr = if (broke) completion.failure.toByteArray() else result.stderr,
+                    durationMillis = completion.durationMillis,
+                    truncated = result.truncated,
+                )
+            }
+        }
+    }
 
     /**
      * Performs one typed setup action with shell identity.
@@ -169,20 +273,20 @@ class ShizukuUserServiceRunner(
                 val bundle = remote.executeSetupAction(action.id)
                     ?: return@withTimeout SetupOutcome.Refused("no result from user service")
 
-                bundle.getString(ProbeService.KEY_REJECTION)?.let { reason ->
+                bundle.getString(ProbeStreamProtocol.KEY_REJECTION)?.let { reason ->
                     return@withTimeout SetupOutcome.Refused(reason)
                 }
 
-                val hasExit = bundle.getBoolean(ProbeService.KEY_HAS_EXIT, false)
-                val stderr = bundle.getByteArray(ProbeService.KEY_STDERR) ?: ByteArray(0)
-                val stdout = bundle.getByteArray(ProbeService.KEY_STDOUT) ?: ByteArray(0)
+                val hasExit = bundle.getBoolean(ProbeStreamProtocol.KEY_HAS_EXIT, false)
+                val stderr = bundle.getByteArray(ProbeStreamProtocol.KEY_STDERR) ?: ByteArray(0)
+                val stdout = bundle.getByteArray(ProbeStreamProtocol.KEY_STDOUT) ?: ByteArray(0)
                 // pm reports failures on either stream; both are short, so both are kept.
                 val message = (decode(stderr) + " " + decode(stdout)).trim()
                 SetupOutcome.Executed(
-                    exitCode = if (hasExit) bundle.getInt(ProbeService.KEY_EXIT) else null,
+                    exitCode = if (hasExit) bundle.getInt(ProbeStreamProtocol.KEY_EXIT) else null,
                     message = message,
                     durationMillis = bundle.getLong(
-                        ProbeService.KEY_DURATION,
+                        ProbeStreamProtocol.KEY_DURATION,
                         System.currentTimeMillis() - started,
                     ),
                 )
@@ -327,12 +431,29 @@ class ShizukuUserServiceRunner(
         t.javaClass.simpleName + (t.message?.let { ": " + it.take(MESSAGE_LIMIT) } ?: "")
 
     private companion object {
-        /** Bumped when the remote contract changes, so Shizuku restarts an old process. */
-        const val SERVICE_VERSION = 1
+        /**
+         * Bumped when the remote contract changes, so Shizuku restarts an old process.
+         *
+         * Version 2 is Phase 10A.3: executeProbe keeps its transaction id but no longer
+         * returns the payload by value. An unchanged version would let Shizuku reuse a
+         * running version-1 process, which would answer the same transaction id with the old
+         * Bundle -- AIDL verifies transaction ids, not signatures. The protocol version in
+         * the reply is checked as well, so a mismatch that reached the client anyway is
+         * reported as what it is rather than as a missing descriptor.
+         */
+        const val SERVICE_VERSION = 3
         const val BIND_TIMEOUT_MS = 15_000L
 
         /** `pm grant` is fast; a long wait here would only mask a stuck service. */
         const val SETUP_TIMEOUT_MS = 20_000L
+
+        /**
+         * Cancellation cleanup is a short call, and must not become a second hang.
+         *
+         * Generous enough for a Binder round trip that only walks a registry, short enough
+         * that a wedged service cannot hold a cancelled capture open.
+         */
+        const val CANCEL_TIMEOUT_MS = 5_000L
 
         /** A disconnect that arrived before the new binding was ever used. */
         const val TEARDOWN_RACE = "disconnected before first use"
